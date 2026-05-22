@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-05-22T09:17:16Z",
+  "updatedAt": "2026-05-22T09:42:30Z",
   "students": {
     "ceilf6": {
       "activeIssue": null,
@@ -11,13 +11,14 @@
       ],
       "reviewedIssues": [
         4,
-        9
+        9,
+        5
       ],
       "bugPenalties": [],
       "developmentScore": 2.25,
-      "reviewScore": 0.5,
+      "reviewScore": 0.75,
       "penaltyScore": 0,
-      "totalScore": 2.75
+      "totalScore": 3
     },
     "MINTPIPERAS": {
       "activeIssue": null,
@@ -35,14 +36,16 @@
       "totalScore": 1.25
     },
     "Suxian2001": {
-      "activeIssue": 5,
-      "completedIssues": [],
+      "activeIssue": null,
+      "completedIssues": [
+        5
+      ],
       "reviewedIssues": [],
       "bugPenalties": [],
-      "developmentScore": 0,
+      "developmentScore": 0.75,
       "reviewScore": 0,
       "penaltyScore": 0,
-      "totalScore": 0
+      "totalScore": 0.75
     },
     "yangchloeeeee": {
       "activeIssue": 7,
@@ -83,11 +86,11 @@
       "stack": [
         "research"
       ],
-      "status": "claimed",
+      "status": "closed",
       "assignee": "Suxian2001",
       "claimedAt": "2026-05-22T04:39:25Z",
-      "closedAt": null,
-      "mergedPr": null
+      "closedAt": "2026-05-22T09:42:30Z",
+      "mergedPr": 17
     },
     "6": {
       "number": 6,
@@ -228,6 +231,18 @@
       "developerDelta": 0.75,
       "reviewerDelta": 0.25,
       "createdAt": "2026-05-22T09:17:16Z"
+    },
+    {
+      "id": "pr-17-merge",
+      "type": "feature_merge",
+      "issue": 5,
+      "pr": 17,
+      "score": 1,
+      "developer": "Suxian2001",
+      "reviewer": "ceilf6",
+      "developerDelta": 0.75,
+      "reviewerDelta": 0.25,
+      "createdAt": "2026-05-22T09:42:30Z"
     }
   ]
 }
