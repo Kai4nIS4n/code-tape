@@ -1,0 +1,20 @@
+name: Training Labels
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  labels:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: node scripts/workflows/init-labels.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.TRAINING_BOT_TOKEN || secrets.GITHUB_TOKEN }}

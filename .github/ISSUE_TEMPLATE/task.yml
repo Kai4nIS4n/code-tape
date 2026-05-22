@@ -1,0 +1,39 @@
+name: 训练营任务
+description: 发布一个可认领的训练营任务
+title: "[前端] "
+body:
+  - type: textarea
+    id: background
+    attributes:
+      label: 背景/目标
+      description: 说明这个任务要解决什么问题。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 列出完成任务需要满足的可验证结果。
+    validations:
+      required: true
+  - type: input
+    id: stack
+    attributes:
+      label: 技术栈要求
+      description: 例如 React、TypeScript、GitHub Actions、Research。
+    validations:
+      required: true
+  - type: input
+    id: prd
+    attributes:
+      label: 关联 PRD 章节
+      description: 填写 PRD 章节、链接或仓库路径。
+    validations:
+      required: true
+  - type: input
+    id: score
+    attributes:
+      label: 分数说明
+      description: 说明为什么设置为当前 score label。
+    validations:
+      required: true

@@ -1,0 +1,41 @@
+name: Bug 返工任务
+description: 提交一个已合并任务的 bug 修复任务
+title: "[Bug] "
+body:
+  - type: input
+    id: source_issue
+    attributes:
+      label: 关联原 Issue
+      description: 必须使用 #12 这样的格式。
+      placeholder: "#12"
+    validations:
+      required: true
+  - type: input
+    id: source_pr
+    attributes:
+      label: 关联原 PR
+      description: 必须使用 #34 这样的格式。
+      placeholder: "#34"
+    validations:
+      required: true
+  - type: textarea
+    id: symptom
+    attributes:
+      label: bug 现象
+      description: 说明当前表现。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 给出可以复现问题的步骤。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+      description: 说明正确表现应该是什么。
+    validations:
+      required: true

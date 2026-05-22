@@ -154,8 +154,8 @@ PRD 拆解：代码讲解工具
 组长/维护者：
 
 - 可以在主仓库切 feature 分支开发。
-- 仍然必须提 PR。
-- 仍然必须关联 Issue 并经过 CR。
+- 日常开发建议仍然提 PR、关联 Issue 并经过 CR，保证计分和流程一致。
+- 保留仓库管理员直接 push / bypass 权限，用于流程修复、紧急配置调整等维护场景。
 
 ### PR 要求
 
@@ -321,14 +321,15 @@ bug 修复 PR 合并后：
 
 - PR 检查检测 diff，如果普通 PR 修改这些文件则失败。
 - `CODEOWNERS` 将这些文件归属给维护者。
-- `main` 禁止直接 push。
+- `main` 禁止普通同学直接 push，组长/仓库管理员保留 bypass 权限。
 - workflow 使用受控 token 更新文件。
 
 ### 主分支保护
 
 `main` 分支建议启用：
 
-- 禁止直接 push。
+- 禁止普通同学直接 push。
+- 不勾选 “Do not allow bypassing the above settings”，组长/仓库管理员保留直接 push / bypass 权限。
 - 必须通过 PR 合并。
 - 必须通过工作流检查。
 - 使用 squash merge。
