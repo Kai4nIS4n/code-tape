@@ -54,6 +54,66 @@ test('claimIssue records active issue and rejects second active task', () => {
   );
 });
 
+test('claimIssue validates GitHub issue status and supports repair reruns', () => {
+  const progress = createEmptyProgress();
+
+  assert.throws(
+    () =>
+      claimIssue(
+        progress,
+        { number: 12, title: '总控', labels: [] },
+        'alice',
+        '2026-05-22T10:00:00.000Z',
+      ),
+    /not open for claim/,
+  );
+
+  assert.throws(
+    () =>
+      claimIssue(
+        progress,
+        {
+          number: 12,
+          title: '实现录制控制栏',
+          labels: ['score:5', 'stack:react', 'status:claimed'],
+          assignee: 'bob',
+        },
+        'alice',
+        '2026-05-22T10:00:00.000Z',
+      ),
+    /already claimed/,
+  );
+
+  const repaired = claimIssue(
+    progress,
+    {
+      number: 12,
+      title: '实现录制控制栏',
+      labels: ['score:5', 'stack:react', 'status:claimed'],
+      assignee: 'alice',
+    },
+    'alice',
+    '2026-05-22T10:00:00.000Z',
+  );
+
+  assert.equal(repaired.students.alice.activeIssue, 12);
+  assert.equal(repaired.issues['12'].assignee, 'alice');
+  assert.deepEqual(
+    claimIssue(
+      repaired,
+      {
+        number: 12,
+        title: '实现录制控制栏',
+        labels: ['score:5', 'stack:react', 'status:claimed'],
+        assignee: 'alice',
+      },
+      'alice',
+      '2026-05-22T10:00:00.000Z',
+    ),
+    repaired,
+  );
+});
+
 test('parseClosingIssues accepts one closing keyword and rejects ambiguous PRs in guard', () => {
   assert.deepEqual(parseClosingIssues('Implements feature.\n\nCloses #12'), [12]);
   assert.deepEqual(parseClosingIssues('Fixes #12\nResolves #13'), [12, 13]);

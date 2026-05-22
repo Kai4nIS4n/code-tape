@@ -1,4 +1,4 @@
-import { parseScore, parseStack } from './issue-parser.mjs';
+import { hasStatus, parseScore, parseStack } from './issue-parser.mjs';
 import { readFile, writeFile } from 'node:fs/promises';
 
 export async function readProgress(path = 'docs/progress.json') {
@@ -60,13 +60,29 @@ export function cloneProgress(progress) {
 export function claimIssue(progress, issue, username, claimedAt) {
   const next = cloneProgress(progress);
   const student = ensureStudent(next, username);
-  if (student.activeIssue) {
+  if (student.activeIssue && student.activeIssue !== issue.number) {
     throw new Error(`${username} already has active issue #${student.activeIssue}`);
   }
 
   const existingIssue = next.issues[String(issue.number)];
   if (existingIssue?.status === 'claimed') {
+    if (existingIssue.assignee === username && student.activeIssue === issue.number) {
+      return next;
+    }
     throw new Error(`issue #${issue.number} is already claimed`);
+  }
+
+  const assignee = issue.assignee ?? null;
+  if (hasStatus(issue.labels, 'claimed')) {
+    if (assignee !== username) {
+      throw new Error(`issue #${issue.number} is already claimed`);
+    }
+  } else if (!hasStatus(issue.labels, 'open')) {
+    throw new Error(`issue #${issue.number} is not open for claim`);
+  }
+
+  if (assignee && assignee !== username) {
+    throw new Error(`issue #${issue.number} is assigned to ${assignee}`);
   }
 
   const score = parseScore(issue.labels);

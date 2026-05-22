@@ -17,6 +17,12 @@ const actor = event.comment.user.login;
 
 try {
   const issue = await client.getIssue(issueNumber);
+  const activeIssues = await client.listOpenClaimedIssuesByAssignee(actor);
+  const otherActive = activeIssues.find((activeIssue) => activeIssue.number !== issueNumber);
+  if (otherActive) {
+    throw new Error(`${actor} already has active issue #${otherActive.number}`);
+  }
+
   const progress = await readProgress(progressJsonPath);
   const next = claimIssue(
     progress,
@@ -24,6 +30,7 @@ try {
       number: issue.number,
       title: issue.title,
       labels: issue.labels,
+      assignee: issue.assignee?.login,
     },
     actor,
     event.comment.created_at,
@@ -40,7 +47,7 @@ try {
       `@${actor} 认领成功，任务已锁定。`,
       '',
       '- 请从自己的 fork 基于 `main` 创建分支开发。',
-      '- PR 正文必须包含 `Closes #${issueNumber}`。',
+      `- PR 正文必须包含 \`Closes #${issueNumber}\`。`,
       '- PR 需要至少一名非作者同学 CR。',
       '- PR 24 小时内未合并会被关闭，但任务仍归你负责。',
     ].join('\n'),
