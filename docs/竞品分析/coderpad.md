@@ -10,7 +10,7 @@
   - 求职开发者
 - **面试流程**：
   - 面试官创建“Pad”，邀请候选人加入
-  - 支持现场面试（实时协作）与 [Take-Home]([https://coderpad.io/resources/docs/interview/quick-start-guides/interviewers/take-home-projects/](https://coderpad.io/features/take-home-projects/)) 项目模式（异步编程、类似布置作业）
+  - 支持现场面试（实时协作）与 [Take-Home](https://coderpad.io/features/take-home-projects/) 项目模式（异步编程、类似布置作业）
   - 可在 Pad 内进行多语言编码、运行测试和调试，类似[Pad版远程IDE](https://coderpad.io/features/)
 - **核心差异化**：
   - 基于 VS Code 的 IDE 体验
@@ -98,4 +98,3 @@ TakeHome:https://coderpad.io/features/take-home-projects/
 代码编辑器:https://coderpad.io/resources/docs/interview/pads/code-editor/
 代码执行能力:https://coderpad.io/resources/docs/interview/pads/using-pad-features/
 回放机制:https://coderpad.io/resources/docs/interview/pads/playback-mode/
-

@@ -4,7 +4,7 @@
 > 回链总控 Issue：#2  
 > 回链第一阶段调研总控：#3  
 > 调研日期：2026-05-22  
-> 交付物：`docs/竞品分析/codecast-recdev-final.md`（由 v1 / v2 / v3 综合整理）
+> 交付物：`docs/竞品分析/codecast-recdev.md`（由 v1 / v2 / v3 综合整理）
 
 ## 1. 背景与调研目标
 
@@ -318,7 +318,7 @@ P0 最小可行目标：
 | **v2** | **最符合验收标准**：官方链接齐全、三者分轨对比、事件 schema、录制包与索引、回放算法、P0 必做/可后置、自检清单 | 篇幅较长；个别能力（如 Codecast seek）标注为「未明确」需实测 |
 | **v3** | 在 v1 基础上修正表格，保留架构判断 | 仍**无官方链接**；仍合并 Codecast 与 Create；缺少 schema 与包结构细节 |
 
-**综合结论**：以 **v2 为骨架**，并入 **v1/v3** 中的 EventProducer 解耦、Keyframe 静默重放、复制代码的杀手级表述；本文件即为推荐交付的 `codecast-recdev-final.md`。若仓库仅需单一文件名 `codecast-recdev.md`，可将本文件复制或重命名覆盖。
+**综合结论**：以 **v2 为骨架**，并入 **v1/v3** 中的 EventProducer 解耦、Keyframe 静默重放、复制代码的杀手级表述；本文件即为推荐交付的 `codecast-recdev.md`。
 
 ## 14. 后续验证项
 
