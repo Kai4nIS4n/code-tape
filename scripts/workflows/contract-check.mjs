@@ -3,20 +3,14 @@ import { execFileSync } from 'node:child_process';
 import {
   combineChangedFiles,
   evaluateGitNexusContract,
-  openVikingRemoveArgsForStat,
-  parseOpenVikingEnvFile,
   sha256File,
-  toOpenVikingResourceUri,
   validateOpenVikingManifest,
 } from './contract-rules.mjs';
 
 const GITNEXUS_VERSION = '1.6.5';
-const OPENVIKING_VERSION = '0.3.16';
 const OPENVIKING_MANIFEST = 'docs/contracts/openviking.resources.json';
-const OPENVIKING_LOCAL_ENV = '.env.openviking.local';
 
 const command = process.argv[2] ?? 'check';
-loadLocalOpenVikingEnv();
 
 try {
   if (command === 'bootstrap') {
@@ -27,8 +21,6 @@ try {
     runGitNexusContract({ mode: 'ci' });
   } else if (command === 'openviking-check') {
     runOpenVikingCheck();
-  } else if (command === 'openviking-sync') {
-    runOpenVikingSync();
   } else if (command === 'check') {
     runOpenVikingCheck();
     runGitNexusContract({ mode: process.env.CI ? 'ci' : 'local' });
@@ -73,72 +65,8 @@ function runOpenVikingCheck() {
   if (!result.ok) process.exitCode = 1;
 }
 
-function runOpenVikingSync() {
-  runOpenVikingCheck();
-  if (process.exitCode) return;
-  requireOpenVikingEnv();
-
-  const manifest = readManifest();
-  const ovCommand = resolveOpenVikingCommand();
-  const ovIdentityArgs = [
-    '--account',
-    process.env.OPENVIKING_ACCOUNT ?? 'code-tape',
-    '--user',
-    process.env.OPENVIKING_USER ?? 'code-tape-ci',
-    '--agent-id',
-    process.env.OPENVIKING_AGENT_ID ?? 'github-actions',
-  ];
-  const ovEnv = {
-    ...process.env,
-    OPENVIKING_URL: process.env.OPENVIKING_BASE_URL,
-    OV_URL: process.env.OPENVIKING_BASE_URL,
-    OPENVIKING_API_KEY: process.env.OPENVIKING_API_KEY,
-    OV_API_KEY: process.env.OPENVIKING_API_KEY,
-  };
-
-  runOpenViking(ovCommand, ovIdentityArgs, ovEnv, ['health']);
-  for (const resource of manifest.resources) {
-    const targetUri = toOpenVikingResourceUri(resource.uri);
-    const stat = getOpenVikingResourceStat({ ovCommand, ovIdentityArgs, ovEnv, uri: targetUri });
-    if (stat) {
-      runOpenViking(
-        ovCommand,
-        ovIdentityArgs,
-        ovEnv,
-        openVikingRemoveArgsForStat(targetUri, stat),
-      );
-    }
-    runOpenViking(
-      ovCommand,
-      ovIdentityArgs,
-      ovEnv,
-      [
-        'write',
-        targetUri,
-        '--from-file',
-        resource.path,
-        '--mode',
-        'create',
-        '--wait',
-        '--timeout',
-        '120',
-      ],
-    );
-  }
-}
-
 function readManifest() {
   return JSON.parse(readFileSync(OPENVIKING_MANIFEST, 'utf8'));
-}
-
-function requireOpenVikingEnv() {
-  const missing = ['OPENVIKING_BASE_URL', 'OPENVIKING_API_KEY'].filter((name) => !process.env[name]);
-  if (missing.length > 0) {
-    throw new Error(
-      `missing OpenViking env: ${missing.join(', ')}. ` +
-        `For maintainer local sync, create ${OPENVIKING_LOCAL_ENV}.`,
-    );
-  }
 }
 
 function getChangedFiles(mode) {
@@ -176,52 +104,9 @@ function extractImpactSummary(text) {
   return rest.replace(/^[:：\s#-]*/u, '').split(/\n#{1,6}\s|\n##\s/)[0].trim();
 }
 
-function loadLocalOpenVikingEnv() {
-  if (process.env.CI || !existsSync(OPENVIKING_LOCAL_ENV)) return;
-  const env = parseOpenVikingEnvFile(readFileSync(OPENVIKING_LOCAL_ENV, 'utf8'), {
-    home: process.env.HOME ?? '',
-  });
-  for (const [key, value] of Object.entries(env)) {
-    if (process.env[key]) continue;
-    process.env[key] = value;
-  }
-}
-
 function gitLines(args) {
   const output = execFileSync('git', ['-c', 'core.quotePath=false', ...args], { encoding: 'utf8' });
   return output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-}
-
-function getOpenVikingResourceStat({ ovCommand, ovIdentityArgs, ovEnv, uri }) {
-  try {
-    const [command, ...commandArgs] = ovCommand;
-    const output = execFileSync(
-      command,
-      [...commandArgs, ...ovIdentityArgs, 'stat', uri, '--output', 'json'],
-      { encoding: 'utf8', env: ovEnv, stdio: ['ignore', 'pipe', 'ignore'] },
-    );
-    return JSON.parse(output).result ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function runOpenViking(ovCommand, ovIdentityArgs, ovEnv, args, options = {}) {
-  const [command, ...commandArgs] = ovCommand;
-  execFileSync(command, [...commandArgs, ...ovIdentityArgs, ...args], {
-    stdio: 'inherit',
-    env: ovEnv,
-    ...options,
-  });
-}
-
-function resolveOpenVikingCommand() {
-  if (process.env.OPENVIKING_CLI_COMMAND) {
-    return process.env.OPENVIKING_CLI_COMMAND.split(/\s+/).filter(Boolean);
-  }
-  const localOv = `${process.env.HOME ?? ''}/.local/bin/ov`;
-  if (existsSync(localOv)) return [localOv];
-  return ['npx', '--yes', '--package', `@openviking/cli@${OPENVIKING_VERSION}`, '--', 'ov'];
 }
 
 function printContractResult(title, result) {

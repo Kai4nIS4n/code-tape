@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -29,9 +30,6 @@ import {
   classifyContractPaths,
   combineChangedFiles,
   evaluateGitNexusContract,
-  openVikingRemoveArgsForStat,
-  parseOpenVikingEnvFile,
-  toOpenVikingResourceUri,
   validateOpenVikingManifest,
 } from '../workflows/contract-rules.mjs';
 
@@ -390,49 +388,35 @@ test('validateOpenVikingManifest catches missing files duplicate URIs and stale 
   assert.match(result.reasons.join('\n'), /uri must be under/);
 });
 
-test('toOpenVikingResourceUri maps logical project URIs to resource URIs', () => {
-  assert.equal(
-    toOpenVikingResourceUri('/projects/code-tape/docs/技术方案.md'),
-    'viking://resources/projects/code-tape/docs/技术方案.md',
-  );
-  assert.equal(
-    toOpenVikingResourceUri('projects/code-tape/README.md'),
-    'viking://resources/projects/code-tape/README.md',
-  );
-  assert.equal(
-    toOpenVikingResourceUri('viking://resources/projects/code-tape/README.md'),
-    'viking://resources/projects/code-tape/README.md',
-  );
-});
+test('OpenViking contract stays static and does not require service connectivity', () => {
+  const checkedFiles = [
+    'package.json',
+    '.github/workflows/contract-guard.yml',
+    'docs/契约增强.md',
+    'scripts/workflows/contract-check.mjs',
+    'scripts/workflows/contract-rules.mjs',
+  ];
+  const content = checkedFiles.map((path) => readFileSync(path, 'utf8')).join('\n');
+  const forbidden = [
+    ['contract:openviking', ':sync'],
+    ['openviking', '-sync'],
+    ['openviking', '-health'],
+    ['OPENVIKING', '_BASE_URL'],
+    ['OPENVIKING', '_API_KEY'],
+    ['OPENVIKING', '_ACCOUNT'],
+    ['OPENVIKING', '_USER'],
+    ['OPENVIKING', '_AGENT_ID'],
+    ['ov', ' health'],
+    ['runOpenViking', 'Sync'],
+    ['requireOpenViking', 'Env'],
+    ['parseOpenViking', 'EnvFile'],
+    ['toOpenViking', 'ResourceUri'],
+    ['self-hosted, macOS', ', repo-guard-intranet'],
+  ].map((parts) => parts.join(''));
 
-test('parseOpenVikingEnvFile supports local env values without leaking shell precedence', () => {
-  const env = parseOpenVikingEnvFile(
-    [
-      '# local secrets',
-      'OPENVIKING_BASE_URL=http://127.0.0.1:1933',
-      'OPENVIKING_API_KEY="secret"',
-      'OPENVIKING_CLI_COMMAND=$HOME/.local/bin/ov',
-      'bad line',
-    ].join('\n'),
-    { home: '/Users/example' },
-  );
-
-  assert.deepEqual(env, {
-    OPENVIKING_BASE_URL: 'http://127.0.0.1:1933',
-    OPENVIKING_API_KEY: 'secret',
-    OPENVIKING_CLI_COMMAND: '/Users/example/.local/bin/ov',
-  });
-});
-
-test('openVikingRemoveArgsForStat removes files and directories with matching ov commands', () => {
-  assert.deepEqual(
-    openVikingRemoveArgsForStat('viking://resources/projects/code-tape/README.md', { isDir: false }),
-    ['rm', 'viking://resources/projects/code-tape/README.md'],
-  );
-  assert.deepEqual(
-    openVikingRemoveArgsForStat('viking://resources/projects/code-tape/docs', { isDir: true }),
-    ['rm', '--recursive', 'viking://resources/projects/code-tape/docs'],
-  );
+  for (const phrase of forbidden) {
+    assert.equal(content.includes(phrase), false, `${phrase} should not be part of the static manifest contract`);
+  }
 });
 
 test('feature scoring writes idempotent ledger and clears active issue', () => {

@@ -4,12 +4,8 @@ on:
   pull_request:
     branches: [main]
     types: [opened, edited, synchronize, reopened, ready_for_review]
-  pull_request_target:
-    branches: [main]
-    types: [opened, edited, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -38,42 +34,3 @@ jobs:
         with:
           node-version: 20
       - run: npm run contract:openviking:check
-
-  openviking-health:
-    if: github.event_name == 'pull_request_target'
-    runs-on: [self-hosted, macOS, repo-guard-intranet]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - run: npx --yes --package @openviking/cli@0.3.16 -- ov health
-        env:
-          OPENVIKING_BASE_URL: ${{ vars.OPENVIKING_BASE_URL }}
-          OPENVIKING_URL: ${{ vars.OPENVIKING_BASE_URL }}
-          OV_URL: ${{ vars.OPENVIKING_BASE_URL }}
-          OPENVIKING_API_KEY: ${{ secrets.OPENVIKING_API_KEY }}
-          OV_API_KEY: ${{ secrets.OPENVIKING_API_KEY }}
-          OPENVIKING_ACCOUNT: code-tape
-          OPENVIKING_USER: code-tape-ci
-          OPENVIKING_AGENT_ID: github-actions
-
-  openviking-sync:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    runs-on: [self-hosted, macOS, repo-guard-intranet]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - run: npm run contract:openviking:sync
-        env:
-          OPENVIKING_BASE_URL: ${{ vars.OPENVIKING_BASE_URL }}
-          OPENVIKING_API_KEY: ${{ secrets.OPENVIKING_API_KEY }}
-          OPENVIKING_ACCOUNT: code-tape
-          OPENVIKING_USER: code-tape-ci
-          OPENVIKING_AGENT_ID: github-actions

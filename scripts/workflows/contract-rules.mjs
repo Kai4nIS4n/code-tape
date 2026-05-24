@@ -171,39 +171,10 @@ export function validateOpenVikingManifest({
   return { ok: reasons.length === 0, reasons, warnings };
 }
 
-export function parseOpenVikingEnvFile(text, { home = '' } = {}) {
-  const env = {};
-  for (const line of text.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(trimmed);
-    if (!match) continue;
-    const [, key, rawValue] = match;
-    env[key] = expandOpenVikingEnvValue(rawValue.trim(), { home });
-  }
-  return env;
-}
-
-export function toOpenVikingResourceUri(uri) {
-  if (uri.startsWith('viking://')) return uri;
-  return `viking://resources${uri.startsWith('/') ? uri : `/${uri}`}`;
-}
-
-export function openVikingRemoveArgsForStat(uri, stat) {
-  return stat?.isDir ? ['rm', '--recursive', uri] : ['rm', uri];
-}
-
 export function sha256File(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
 function normalizeFiles(files) {
   return [...new Set((files ?? []).map((file) => file.replaceAll('\\', '/')).filter(Boolean))];
-}
-
-function expandOpenVikingEnvValue(value, { home }) {
-  const unquoted = value.replace(/^['"]|['"]$/g, '');
-  return unquoted
-    .replaceAll('$HOME', home)
-    .replaceAll('${HOME}', home);
 }

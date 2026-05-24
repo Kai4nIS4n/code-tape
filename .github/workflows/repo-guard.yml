@@ -32,7 +32,10 @@ jobs:
           contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
         )
       )
-    runs-on: [self-hosted, macOS, repo-guard-intranet]
+    runs-on:
+      - self-hosted
+      - macOS
+      - repo-guard-intranet
     steps:
       - uses: ceilf6/repo-guard@main
         with:

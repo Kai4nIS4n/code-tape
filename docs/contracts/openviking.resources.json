@@ -4,19 +4,19 @@
     {
       "path": "README.md",
       "uri": "/projects/code-tape/README.md",
-      "sha256": "2a7883cc4ed0fc7e7818d08bf9d2b9375f38f4c0decdd30b6af4d4e7fff82384",
+      "sha256": "03db93ae068c9816b69850b8462c0aa6cae9779cc850c04842df7ead26f2ed3e",
       "reason": "项目入口、ADR 索引和核心文档导航"
     },
     {
       "path": "AGENTS.md",
       "uri": "/projects/code-tape/AGENTS.md",
-      "sha256": "590c205fa839384afae210f0cc4b0b5cc4b77b5d17f4d74564dc152b0204a27d",
+      "sha256": "73094ffc23f832d3f5c252c0cf9cba6adf73c15b097c20f2ffaf81c964f3bb72",
       "reason": "通用 agent 本地开发约束"
     },
     {
       "path": "CLAUDE.md",
       "uri": "/projects/code-tape/CLAUDE.md",
-      "sha256": "590c205fa839384afae210f0cc4b0b5cc4b77b5d17f4d74564dc152b0204a27d",
+      "sha256": "73094ffc23f832d3f5c252c0cf9cba6adf73c15b097c20f2ffaf81c964f3bb72",
       "reason": "Claude/兼容 agent 本地开发约束"
     },
     {
@@ -52,7 +52,7 @@
     {
       "path": "docs/契约增强.md",
       "uri": "/projects/code-tape/docs/契约增强.md",
-      "sha256": "984d5ef67ae01d7270c380b23fdfbdf742b79e78b5ecbd7b95c607d203b6e2c0",
+      "sha256": "c125906d96927314b22d9b3b1814cdfb34f518e7bddfb2c69905935a3823266a",
       "reason": "GitNexus 与 OpenViking 双层契约操作说明"
     }
   ]
