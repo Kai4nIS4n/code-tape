@@ -28,7 +28,11 @@ export type RecorderControlsProps = {
  *   - 持续时间用 font-mono 显示；红点 + 时间是「正在录制」最强烈的视觉信号
  *   - 错误状态把 lastError.message 渲染到 toast / status-bar
  */
-export function RecorderControls({ state }: RecorderControlsProps) {
+export function RecorderControls({
+  state,
+  microphoneEnabled,
+  cameraEnabled,
+}: RecorderControlsProps) {
   return (
     <div className="flex h-12 items-center gap-3 border-b border-border bg-surface/80 px-4">
       <span
@@ -40,8 +44,25 @@ export function RecorderControls({ state }: RecorderControlsProps) {
       />
       <span className="font-mono text-sm text-foreground">{formatDurationMs(state.durationMs)}</span>
       <span className="text-xs uppercase tracking-wide text-muted">{state.status}</span>
+      <button
+        type="button"
+        className="rounded-md border border-border px-2 py-1 text-xs text-muted"
+        disabled
+      >
+        开始录制
+      </button>
+      <button
+        type="button"
+        className="rounded-md border border-border px-2 py-1 text-xs text-muted"
+        disabled
+      >
+        运行代码
+      </button>
+      <span className="text-xs text-muted">
+        麦克风 {microphoneEnabled ? "on" : "off"} · 摄像头 {cameraEnabled ? "on" : "off"}
+      </span>
       <span className="flex-1" />
-      <span className="text-xs text-muted">RecorderControls stub · 待 issue 实装</span>
+      <span className="text-xs text-muted">RecorderControls scaffold · 待 issue 实装</span>
     </div>
   );
 }

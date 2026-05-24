@@ -28,15 +28,42 @@ export function acceptRuntimeMessage(
   if (m.source !== RUNTIME_SOURCE) return null;
   if (typeof m.runId !== "string") return null;
   if (expected.runId && m.runId !== expected.runId) return null;
-  if (expected.source && event.source && event.source !== expected.source) return null;
+  if (expected.source && event.source !== expected.source) return null;
   const validTypes = ["ready", "console", "error", "blocked-alert", "complete"];
   if (typeof m.type !== "string" || !validTypes.includes(m.type)) return null;
   if (!m.payload || typeof m.payload !== "object") return null;
+  if (!isRuntimePayload(m.type, m.payload)) return null;
   return m as RuntimeMessage;
 }
 
 function buildSrcDoc(bootScript: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>code-tape runtime</title></head><body><script>${bootScript}</script></body></html>`;
+}
+
+function buildPreviewSrcDoc(previewHtml: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><title>code-tape replay preview</title></head>${previewHtml}</html>`;
+}
+
+function isRuntimePayload(type: string, payload: object): boolean {
+  const p = payload as Record<string, unknown>;
+  switch (type) {
+    case "ready":
+      return true;
+    case "console":
+      return (
+        (p.level === "log" || p.level === "warn" || p.level === "error") &&
+        Array.isArray(p.args) &&
+        p.args.every((arg) => typeof arg === "string")
+      );
+    case "error":
+      return typeof p.message === "string" && (typeof p.stack === "undefined" || typeof p.stack === "string");
+    case "blocked-alert":
+      return typeof p.message === "string";
+    case "complete":
+      return typeof p.previewHtml === "string";
+    default:
+      return false;
+  }
 }
 
 export function createIframeRuntime(options: IframeRuntimeOptions = {}): IframeRuntime {
@@ -53,16 +80,16 @@ export function createIframeRuntime(options: IframeRuntimeOptions = {}): IframeR
     iframe = null;
   };
 
-  const ensureIframe = (): Promise<HTMLIFrameElement> => {
+  const createIframe = (sandbox: string, srcdoc: string): Promise<HTMLIFrameElement> => {
     if (!host) throw new Error("IframeRuntime: mount(host) must be called first");
-    if (iframe) return Promise.resolve(iframe);
+    teardown();
     const el = document.createElement("iframe");
-    el.setAttribute("sandbox", sandboxFlags);
+    el.setAttribute("sandbox", sandbox);
     el.setAttribute("title", "code-tape preview");
     el.style.width = "100%";
     el.style.height = "100%";
     el.style.border = "0";
-    el.srcdoc = buildSrcDoc(IFRAME_BOOT_SCRIPT);
+    el.srcdoc = srcdoc;
     iframe = el;
     return new Promise((resolve) => {
       el.addEventListener("load", () => resolve(el), { once: true });
@@ -73,10 +100,10 @@ export function createIframeRuntime(options: IframeRuntimeOptions = {}): IframeR
   return {
     async mount(target: HTMLElement) {
       host = target;
-      await ensureIframe();
+      if (!iframe) await createIframe("", buildPreviewSrcDoc("<body></body>"));
     },
     async run(input: IframeRunInput): Promise<IframeRunResult> {
-      const frame = await ensureIframe();
+      const frame = await createIframe(sandboxFlags, buildSrcDoc(IFRAME_BOOT_SCRIPT));
       const stdout: string[] = [];
       const stderr: string[] = [];
 
@@ -142,14 +169,7 @@ export function createIframeRuntime(options: IframeRuntimeOptions = {}): IframeR
       });
     },
     async renderPreview(previewHtml: string): Promise<void> {
-      const frame = await ensureIframe();
-      const win = frame.contentWindow;
-      if (!win) return;
-      // For replay rendering we don't execute code — just inject the captured DOM.
-      const doc = win.document;
-      doc.open();
-      doc.write(`<!doctype html><html><head><meta charset="utf-8"></head>${previewHtml}</html>`);
-      doc.close();
+      await createIframe("", buildPreviewSrcDoc(previewHtml));
     },
     reset() {
       if (iframe && host) {

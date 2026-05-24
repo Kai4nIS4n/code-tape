@@ -1,12 +1,16 @@
 import JSZip from "jszip";
 import {
-  validateRecordingPackageV1,
-  migrateRecordingPackage,
+  RECORDING_SCHEMA_VERSION,
+  verifyRecordingPackageIntegrity,
 } from "@/shared/recording-schema";
 import type {
   PackageLoader,
   PackageLoaderInput,
   PackageLoadResult,
+  RecordingIndexes,
+  RecordingManifest,
+  RecordingMedia,
+  RecordingMeta,
   RecordingPackageV1,
   RecordingRepository,
 } from "@/shared/recording-schema";
@@ -48,6 +52,8 @@ async function loadFromZip(zip: Blob): Promise<PackageLoadResult> {
   const eventsFile = archive.file("events.json");
   const snapshotsFile = archive.file("snapshots.json");
   const metaFile = archive.file("meta.json");
+  const indexesFile = archive.file("indexes.json");
+  const mediaMetaFile = archive.file("media.json");
   if (!manifestFile || !eventsFile || !snapshotsFile || !metaFile) {
     return {
       ok: false,
@@ -55,22 +61,45 @@ async function loadFromZip(zip: Blob): Promise<PackageLoadResult> {
     };
   }
 
-  const [manifestRaw, eventsRaw, snapshotsRaw, metaRaw] = await Promise.all([
+  const [manifestRaw, eventsRaw, snapshotsRaw, metaRaw, indexesRaw, mediaMetaRaw] = await Promise.all([
     manifestFile.async("string"),
     eventsFile.async("string"),
     snapshotsFile.async("string"),
     metaFile.async("string"),
+    indexesFile?.async("string") ?? Promise.resolve(""),
+    mediaMetaFile?.async("string") ?? Promise.resolve(""),
   ]);
 
   let parsed: RecordingPackageV1;
+  let mediaBlob: Blob | null = null;
   try {
+    const manifest = JSON.parse(manifestRaw) as RecordingManifest;
+    const meta = JSON.parse(metaRaw) as RecordingMeta;
+    const mediaFromJson = mediaMetaRaw ? (JSON.parse(mediaMetaRaw) as RecordingMedia) : null;
+    const mediaEntry = Object.keys(archive.files).find((n) => n.startsWith("media.") && n !== "media.json");
+    const mediaBuffer = mediaEntry ? await archive.file(mediaEntry)!.async("arraybuffer") : null;
+    mediaBlob = mediaBuffer
+      ? new Blob([mediaBuffer], { type: mediaFromJson?.mimeType ?? "application/octet-stream" })
+      : null;
+    const media = mediaFromJson ?? (mediaBlob && manifest.checksums.mediaSha256
+        ? {
+            blobId: "file-media",
+            mimeType: mediaBlob.type || "application/octet-stream",
+            durationMs: meta.durationMs,
+            sizeBytes: mediaBlob.size,
+            timelineOffsetMs: 0,
+            hasAudio: meta.mediaCapability.audio === "available",
+            hasCamera: meta.mediaCapability.camera === "available",
+          }
+        : null);
     parsed = {
-      manifest: JSON.parse(manifestRaw),
-      meta: JSON.parse(metaRaw),
+      manifest,
+      meta,
       events: JSON.parse(eventsRaw),
       snapshots: JSON.parse(snapshotsRaw),
-      media: null,
-      schemaVersion: JSON.parse(manifestRaw).schemaVersion,
+      media,
+      indexes: indexesRaw ? (JSON.parse(indexesRaw) as RecordingIndexes) : undefined,
+      schemaVersion: manifest.schemaVersion ?? RECORDING_SCHEMA_VERSION,
     } as RecordingPackageV1;
   } catch (err) {
     return {
@@ -79,19 +108,5 @@ async function loadFromZip(zip: Blob): Promise<PackageLoadResult> {
     };
   }
 
-  const migrated = migrateRecordingPackage(parsed);
-  if (!migrated.ok) return { ok: false, error: migrated.error };
-
-  const valid = validateRecordingPackageV1(migrated.package);
-  if (!valid.ok) {
-    return {
-      ok: false,
-      error: {
-        code: "invalid-manifest",
-        message: valid.errors.map((e) => `${e.path}: ${e.message}`).join("; "),
-      },
-    };
-  }
-
-  return { ok: true, package: migrated.package, warnings: [] };
+  return verifyRecordingPackageIntegrity(parsed, mediaBlob);
 }

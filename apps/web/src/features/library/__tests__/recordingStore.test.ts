@@ -1,4 +1,5 @@
 import "fake-indexeddb/auto";
+import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createRecordingStore } from "../recordingStore";
 import type {
@@ -130,6 +131,7 @@ describe("createRecordingStore — two-phase commit", () => {
     await store.saveDraft(makeInput("rec-1"));
     await store.commit("rec-1");
     const result = await store.load("rec-1");
+    if (!result.ok) throw new Error(JSON.stringify(result.error));
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.package.meta.id).toBe("rec-1");
@@ -181,8 +183,28 @@ describe("createRecordingStore — two-phase commit", () => {
 
     const sink = createRecordingStore({ databaseName: uniqueDbName() });
     const imported = await sink.importZip(zipBlob);
+    if (!imported.ok) throw new Error(imported.message);
     expect(imported.ok).toBe(true);
     const list = await sink.list();
     expect(list[0].id).toBe("rec-export");
+  });
+
+  it("importZip rejects packages whose original manifest checksum no longer matches", async () => {
+    const store = createRecordingStore({ databaseName: uniqueDbName() });
+    await store.saveDraft(makeInput("rec-corrupt"));
+    await store.commit("rec-corrupt");
+    const zipBlob = await store.exportZip("rec-corrupt");
+    const archive = await JSZip.loadAsync(zipBlob);
+    archive.file("events.json", JSON.stringify([makeEvent(99)]));
+    const corrupted = await archive.generateAsync({ type: "blob" });
+
+    const sink = createRecordingStore({ databaseName: uniqueDbName() });
+    const imported = await sink.importZip(corrupted);
+
+    expect(imported.ok).toBe(false);
+    if (!imported.ok) {
+      expect(imported.reason).toBe("validation-failed");
+      expect(imported.message).toMatch(/checksum-mismatch/);
+    }
   });
 });

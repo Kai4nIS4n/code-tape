@@ -89,6 +89,48 @@ describe("validateRecordingPackageV1", () => {
     }
   });
 
+  it("rejects duplicate and out-of-order event seq values", () => {
+    const pkg = makePackage();
+    const first = mockContentChangeEvent(1);
+    const duplicate = mockContentChangeEvent(1);
+    const outOfOrder = mockContentChangeEvent(0);
+
+    const duplicateResult = validateRecordingPackageV1({
+      ...pkg,
+      events: [first, duplicate],
+    });
+    const orderResult = validateRecordingPackageV1({
+      ...pkg,
+      events: [first, outOfOrder],
+    });
+
+    expect(duplicateResult.ok).toBe(false);
+    expect(orderResult.ok).toBe(false);
+  });
+
+  it("rejects invalid event source, track, and known payload shape", () => {
+    const pkg = makePackage();
+    const event = mockContentChangeEvent(1);
+    const result = validateRecordingPackageV1({
+      ...pkg,
+      events: [
+        {
+          ...event,
+          source: "browser",
+          track: "screen",
+          payload: { fileId: "main" },
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.path === "events[0].source")).toBe(true);
+      expect(result.errors.some((e) => e.path === "events[0].track")).toBe(true);
+      expect(result.errors.some((e) => e.path === "events[0].payload.code")).toBe(true);
+    }
+  });
+
   it("isRecordingPackageV1 narrows the type", () => {
     const input: unknown = makePackage();
     expect(isRecordingPackageV1(input)).toBe(true);
@@ -97,24 +139,7 @@ describe("validateRecordingPackageV1", () => {
 
 describe("assertEventSeqInvariants", () => {
   function mockEvent(seq: number): RecordingEvent {
-    return {
-      id: `e-${seq}`,
-      seq,
-      timestampMs: seq * 100,
-      source: "editor",
-      track: "main",
-      type: "content-change",
-      payload: {
-        fileId: "main",
-        version: seq,
-        code: "",
-        contentHash: "",
-        language: "javascript",
-        changeReason: "input",
-        changeCount: 1,
-        flushedBy: "debounce",
-      },
-    };
+    return mockContentChangeEvent(seq);
   }
 
   it("accepts monotonic unique seq", () => {
@@ -132,6 +157,27 @@ describe("assertEventSeqInvariants", () => {
     expect(result.ok).toBe(false);
   });
 });
+
+function mockContentChangeEvent(seq: number): RecordingEvent {
+  return {
+    id: `e-${seq}`,
+    seq,
+    timestampMs: seq * 100,
+    source: "editor",
+    track: "main",
+    type: "content-change",
+    payload: {
+      fileId: "main",
+      version: seq,
+      code: "",
+      contentHash: "",
+      language: "javascript",
+      changeReason: "input",
+      changeCount: 1,
+      flushedBy: "debounce",
+    },
+  };
+}
 
 describe("migrateRecordingPackage", () => {
   it("passes through already-current packages", () => {

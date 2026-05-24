@@ -1,7 +1,8 @@
 import JSZip from "jszip";
 import {
   RECORDING_SCHEMA_VERSION,
-  validateRecordingPackageV1,
+  sha256Blob,
+  verifyRecordingPackageIntegrity,
 } from "@/shared/recording-schema";
 import type {
   PackageLoadResult,
@@ -95,7 +96,7 @@ export function createRecordingStore(options: RecordingStoreOptions = {}): Recor
     return value ?? null;
   };
 
-  type StoredBlob = { buffer: ArrayBuffer; mimeType: string };
+  type StoredBlob = { buffer?: ArrayBuffer; dataBase64?: string; mimeType: string };
 
   const readBlob = async (blobId: string): Promise<Blob | null> => {
     const db = await getDb();
@@ -104,7 +105,8 @@ export function createRecordingStore(options: RecordingStoreOptions = {}): Recor
     const value = (await promisifyRequest(store.get(blobId))) as StoredBlob | undefined;
     await awaitTransaction(tx);
     if (!value) return null;
-    return new Blob([value.buffer], { type: value.mimeType });
+    const buffer = value.dataBase64 ? base64ToArrayBuffer(value.dataBase64) : value.buffer;
+    return buffer ? new Blob([buffer], { type: value.mimeType }) : null;
   };
 
   return {
@@ -114,6 +116,13 @@ export function createRecordingStore(options: RecordingStoreOptions = {}): Recor
       const blobId = input.mediaBlob ? generateId("blob") : null;
       const eventsSha256 = await sha256Hex(canonicalStringify(input.events));
       const snapshotsSha256 = await sha256Hex(canonicalStringify(input.snapshots));
+      // Materialize the blob to ArrayBuffer BEFORE opening the transaction so
+      // IDB sees a structured-clone-safe value (some engines lose Blob prototype
+      // through structured clone, breaking later .arrayBuffer() reads).
+      const bufferToStore = input.mediaBlob ? await input.mediaBlob.arrayBuffer() : null;
+      const mediaSha256 = bufferToStore
+        ? await sha256Blob(new Blob([bufferToStore], { type: input.mediaBlob?.type }))
+        : undefined;
 
       const stored: StoredRecording = {
         id: recordingId,
@@ -123,7 +132,11 @@ export function createRecordingStore(options: RecordingStoreOptions = {}): Recor
           status: "draft",
           createdAt: input.meta.createdAt,
           completedAt: null,
-          checksums: { eventsSha256, snapshotsSha256 },
+          checksums: {
+            eventsSha256,
+            snapshotsSha256,
+            ...(mediaSha256 ? { mediaSha256 } : {}),
+          },
         },
         meta: input.meta,
         events: input.events,
@@ -144,17 +157,16 @@ export function createRecordingStore(options: RecordingStoreOptions = {}): Recor
         createdAtMs: Date.now(),
       };
 
-      // Materialize the blob to ArrayBuffer BEFORE opening the transaction so
-      // IDB sees a structured-clone-safe value (some engines lose Blob prototype
-      // through structured clone, breaking later .arrayBuffer() reads).
-      const bufferToStore = input.mediaBlob ? await input.mediaBlob.arrayBuffer() : null;
       try {
         const tx = db.transaction([STORE_RECORDINGS, STORE_BLOBS], "readwrite");
         const recordings = tx.objectStore(STORE_RECORDINGS);
         const blobs = tx.objectStore(STORE_BLOBS);
         recordings.put(stored);
         if (bufferToStore && blobId && input.mediaBlob) {
-          const payload: StoredBlob = { buffer: bufferToStore, mimeType: input.mediaBlob.type };
+          const payload: StoredBlob = {
+            dataBase64: arrayBufferToBase64(bufferToStore),
+            mimeType: input.mediaBlob.type,
+          };
           blobs.put(payload, blobId);
         }
         await awaitTransaction(tx);
@@ -229,17 +241,8 @@ export function createRecordingStore(options: RecordingStoreOptions = {}): Recor
         media: stored.media,
         indexes: stored.indexes,
       };
-      const valid = validateRecordingPackageV1(pkg);
-      if (!valid.ok) {
-        return {
-          ok: false,
-          error: {
-            code: "invalid-manifest",
-            message: valid.errors.map((e) => `${e.path}: ${e.message}`).join("; "),
-          },
-        };
-      }
-      return { ok: true, package: pkg, warnings: [] };
+      const mediaBlob = stored.blobId ? await readBlob(stored.blobId) : null;
+      return verifyRecordingPackageIntegrity(pkg, mediaBlob);
     },
 
     async rename(recordingId: string, title: string): Promise<void> {
@@ -274,6 +277,7 @@ export function createRecordingStore(options: RecordingStoreOptions = {}): Recor
       zip.file("events.json", JSON.stringify(stored.events));
       zip.file("snapshots.json", JSON.stringify(stored.snapshots));
       zip.file("indexes.json", JSON.stringify(stored.indexes));
+      if (stored.media) zip.file("media.json", JSON.stringify(stored.media, null, 2));
       if (stored.blobId) {
         const blob = await readBlob(stored.blobId);
         if (blob) {
@@ -295,23 +299,61 @@ export function createRecordingStore(options: RecordingStoreOptions = {}): Recor
         const eventsFile = archive.file("events.json");
         const snapshotsFile = archive.file("snapshots.json");
         const indexesFile = archive.file("indexes.json");
+        const mediaMetaFile = archive.file("media.json");
         if (!manifestFile || !metaFile || !eventsFile || !snapshotsFile) {
           return { ok: false, reason: "validation-failed", message: "incomplete zip" };
         }
-        const [metaRaw, eventsRaw, snapshotsRaw, indexesRaw] = await Promise.all([
+        const [manifestRaw, metaRaw, eventsRaw, snapshotsRaw, indexesRaw, mediaMetaRaw] = await Promise.all([
+          manifestFile.async("string"),
           metaFile.async("string"),
           eventsFile.async("string"),
           snapshotsFile.async("string"),
           indexesFile?.async("string") ?? Promise.resolve(""),
+          mediaMetaFile?.async("string") ?? Promise.resolve(""),
         ]);
-        // manifestFile presence already validated above; we regenerate manifest on save.
-        void manifestFile;
+        const manifest = JSON.parse(manifestRaw) as RecordingManifest;
         const meta = JSON.parse(metaRaw) as RecordingMeta;
         const events = JSON.parse(eventsRaw) as RecordingEvent[];
         const snapshots = JSON.parse(snapshotsRaw) as RecordingSnapshot[];
         const indexes = indexesRaw ? (JSON.parse(indexesRaw) as RecordingIndexes) : emptyIndexes();
-        const mediaEntry = Object.keys(archive.files).find((n) => n.startsWith("media."));
-        const mediaBlob = mediaEntry ? await archive.file(mediaEntry)!.async("blob") : null;
+        const mediaFromJson = mediaMetaRaw ? (JSON.parse(mediaMetaRaw) as RecordingMedia) : null;
+        const mediaEntry = Object.keys(archive.files).find((n) => n.startsWith("media.") && n !== "media.json");
+        const mediaBuffer = mediaEntry ? await archive.file(mediaEntry)!.async("arraybuffer") : null;
+        const mediaBlob = mediaBuffer
+          ? new Blob([mediaBuffer], { type: mediaFromJson?.mimeType ?? "application/octet-stream" })
+          : null;
+        const media = mediaFromJson ?? (mediaBlob && manifest.checksums.mediaSha256
+            ? {
+                blobId: generateId("blob"),
+                mimeType: mediaBlob.type || "application/octet-stream",
+                durationMs: meta.durationMs,
+                sizeBytes: mediaBlob.size,
+                timelineOffsetMs: 0,
+                hasAudio: meta.mediaCapability.audio === "available",
+                hasCamera: meta.mediaCapability.camera === "available",
+              }
+            : null);
+        const integrity = await verifyRecordingPackageIntegrity(
+          {
+            schemaVersion: RECORDING_SCHEMA_VERSION,
+            manifest,
+            meta,
+            events,
+            snapshots,
+            indexes,
+            media,
+          } satisfies RecordingPackageV1,
+          mediaBlob,
+        );
+        if (!integrity.ok) {
+          return {
+            ok: false,
+            reason: "validation-failed",
+            message: "target" in integrity.error
+              ? `${integrity.error.code}:${integrity.error.target}`
+              : integrity.error.code,
+          };
+        }
         const saved = await this.saveDraft({ meta, events, snapshots, indexes, mediaBlob });
         if (!saved.ok) return saved;
         return this.commit(saved.recordingId);
@@ -366,6 +408,28 @@ function extensionFor(mimeType: string | undefined | null): string {
   if (mimeType.includes("mp4")) return ".mp4";
   if (mimeType.includes("ogg")) return ".ogg";
   return ".bin";
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunkSize)));
+  }
+  if (typeof btoa === "function") return btoa(binary);
+  return Buffer.from(binary, "binary").toString("base64");
+}
+
+function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  const binary = typeof atob === "function"
+    ? atob(base64)
+    : Buffer.from(base64, "base64").toString("binary");
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes.buffer;
 }
 
 function emptyIndexes(): RecordingIndexes {

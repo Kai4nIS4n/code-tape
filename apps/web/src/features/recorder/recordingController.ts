@@ -180,7 +180,7 @@ export function createRecordingController(options: RecordingControllerOptions): 
           media: null,
         });
 
-        await repository.saveDraft({
+        const saveResult = await repository.saveDraft({
           meta: pkg.meta,
           events: pkg.events,
           snapshots: pkg.snapshots,
@@ -192,7 +192,14 @@ export function createRecordingController(options: RecordingControllerOptions): 
           },
           mediaBlob,
         });
-        await repository.commit(pkg.meta.id);
+        if (!saveResult.ok) {
+          throw persistenceError("save-draft-failed", saveResult.reason, saveResult.message);
+        }
+
+        const commitResult = await repository.commit(pkg.meta.id);
+        if (!commitResult.ok) {
+          throw persistenceError("commit-failed", commitResult.reason, commitResult.message);
+        }
 
         transitionTo("completed");
         return pkg;
@@ -225,4 +232,10 @@ export function createRecordingController(options: RecordingControllerOptions): 
 function errorToInfo(err: unknown): { code: string; message: string } {
   if (err instanceof Error) return { code: err.name, message: err.message };
   return { code: "unknown", message: String(err) };
+}
+
+function persistenceError(code: string, reason: string, message: string): Error {
+  const error = new Error(`${code}: ${reason}: ${message}`);
+  error.name = code;
+  return error;
 }

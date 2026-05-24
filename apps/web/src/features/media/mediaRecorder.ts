@@ -10,6 +10,8 @@ export type MediaRecorderWrapperOptions = {
   preferredMimeTypes?: string[];
   /** Timeslice for dataavailable callbacks (ms). Defaults to 1000. */
   timesliceMs?: number;
+  /** Test hook; defaults to performance.now(). */
+  nowProvider?: () => number;
 };
 
 const DEFAULT_MIMES = [
@@ -41,10 +43,13 @@ export function createMediaRecorderWrapper(
 ): MediaRecorderWrapper {
   const preferred = options.preferredMimeTypes ?? DEFAULT_MIMES;
   const timesliceMs = options.timesliceMs ?? 1000;
+  const now = options.nowProvider ?? (() => performance.now());
 
   let recorder: MediaRecorder | null = null;
   let chunks: BlobPart[] = [];
   let startedAt = 0;
+  let pauseStartedAt: number | null = null;
+  let totalPausedMs = 0;
   let mimeType = "";
   let hasAudio = false;
   let hasCamera = false;
@@ -67,12 +72,14 @@ export function createMediaRecorderWrapper(
       hasAudio = stream.getAudioTracks().length > 0;
       hasCamera = stream.getVideoTracks().length > 0;
       chunks = [];
+      totalPausedMs = 0;
+      pauseStartedAt = null;
       recorder = new MediaRecorder(stream, { mimeType });
       recorder.addEventListener("dataavailable", (event: BlobEvent) => {
         if (event.data && event.data.size > 0) {
           chunks.push(event.data);
           chunkListeners.forEach((listener) =>
-            listener({ data: event.data, timestampMs: performance.now() - startedAt }),
+            listener({ data: event.data, timestampMs: effectiveDurationMs() }),
           );
         }
       });
@@ -86,14 +93,23 @@ export function createMediaRecorderWrapper(
           }),
         );
       });
-      startedAt = performance.now();
+      startedAt = now();
       recorder.start(timesliceMs);
     },
     pause() {
-      if (recorder && recorder.state === "recording") recorder.pause();
+      if (recorder && recorder.state === "recording") {
+        pauseStartedAt = now();
+        recorder.pause();
+      }
     },
     resume() {
-      if (recorder && recorder.state === "paused") recorder.resume();
+      if (recorder && recorder.state === "paused") {
+        if (pauseStartedAt !== null) {
+          totalPausedMs += now() - pauseStartedAt;
+          pauseStartedAt = null;
+        }
+        recorder.resume();
+      }
     },
     async stop(): Promise<MediaRecorderResult> {
       if (!recorder) {
@@ -110,7 +126,7 @@ export function createMediaRecorderWrapper(
           "stop",
           () => {
             const blob = new Blob(chunks, { type: mimeType });
-            const durationMs = performance.now() - startedAt;
+            const durationMs = effectiveDurationMs();
             recorder = null;
             chunks = [];
             resolve({ blob, mimeType, durationMs, hasAudio, hasCamera });
@@ -129,4 +145,9 @@ export function createMediaRecorderWrapper(
       return () => errorListeners.delete(listener);
     },
   };
+
+  function effectiveDurationMs(): number {
+    const pendingPauseMs = pauseStartedAt === null ? 0 : now() - pauseStartedAt;
+    return Math.max(0, now() - startedAt - totalPausedMs - pendingPauseMs);
+  }
 }

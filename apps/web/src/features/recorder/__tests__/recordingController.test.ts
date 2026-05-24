@@ -152,6 +152,37 @@ describe("createRecordingController", () => {
     expect(repository.commits.length).toBe(1);
   });
 
+  it("does not complete when saveDraft fails", async () => {
+    const { controller, repository } = setup();
+    vi.mocked(repository.saveDraft).mockResolvedValueOnce({
+      ok: false,
+      reason: "quota-exceeded",
+      message: "IndexedDB quota exceeded",
+    });
+
+    await controller.start(makeStartPayload());
+    await expect(controller.stop("user")).rejects.toThrow(/save-draft-failed/);
+
+    expect(controller.state.status).toBe("failed");
+    expect(controller.state.lastError?.code).toBe("save-draft-failed");
+    expect(repository.commits.length).toBe(0);
+  });
+
+  it("does not complete when commit fails", async () => {
+    const { controller, repository } = setup();
+    vi.mocked(repository.commit).mockResolvedValueOnce({
+      ok: false,
+      reason: "validation-failed",
+      message: "draft not found",
+    });
+
+    await controller.start(makeStartPayload());
+    await expect(controller.stop("user")).rejects.toThrow(/commit-failed/);
+
+    expect(controller.state.status).toBe("failed");
+    expect(controller.state.lastError?.code).toBe("commit-failed");
+  });
+
   it("reset returns the controller to idle and disposes producers", async () => {
     const { controller, producers } = setup();
     await controller.start(makeStartPayload());

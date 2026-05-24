@@ -110,8 +110,8 @@ export function RecorderPage() {
   const [controllerState, setControllerState] = useState<RecordingControllerState>(
     INITIAL_CONTROLLER_STATE,
   );
-  const [microphoneEnabled, setMicrophoneEnabled] = useState(true);
-  const [cameraEnabled, setCameraEnabled] = useState(true);
+  const [microphoneEnabled, setMicrophoneEnabled] = useState(false);
+  const [cameraEnabled, setCameraEnabled] = useState(false);
   const [cameraPosition, setCameraPosition] = useState<CameraPositionPayload>(
     INITIAL_CAMERA_POSITION,
   );
@@ -126,8 +126,8 @@ export function RecorderPage() {
       selectedAudioDeviceId: null,
       selectedCameraDeviceId: null,
       mediaCapability: {
-        audio: "available",
-        camera: "available",
+        audio: "unsupported",
+        camera: "unsupported",
         selectedAudioDeviceId: null,
         selectedCameraDeviceId: null,
       },

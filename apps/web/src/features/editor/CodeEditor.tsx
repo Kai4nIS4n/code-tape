@@ -40,7 +40,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
     <div className="relative h-full w-full bg-surface">
       <div className="flex h-full items-center justify-center text-sm text-muted">
         <span className="font-mono">
-          CodeEditor stub · 待 issue「[P0] CodeEditor 组件接入 Monaco」实装
+          CodeEditor scaffold · 待 issue「[P0] CodeEditor 组件接入 Monaco」实装
         </span>
       </div>
     </div>
