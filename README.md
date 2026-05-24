@@ -15,6 +15,7 @@
 
 - Github Actions
     - 通过 issues 和 PR 自动算分工作流，调度仓库开发走向
+        - 使用 [progress-reporter](skills/progress-reporter) 技能、通过飞书智能体 [FrontAgent](https://github.com/ceilf6/FrontAgent) 定时在群内通知进度
     - 使用 [repo-guard](https://github.com/ceilf6/repo-guard) 对 issues 和 PR 进行质量检测、并通过工程提示词要求开发代理审批守卫评论、做出反应
         - 其中 CR 技能来自 [ceilf6-skills](https://github.com/ceilf6/ceilf6-skills/tree/main/code-reviewer)
 - 知识库
