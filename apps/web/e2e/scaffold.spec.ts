@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test("scaffold routes are explicit and do not allow fake recording success", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/", { waitUntil: "domcontentloaded" });
   await expect(page.getByRole("heading", { name: "我的录制" })).toBeVisible();
 
   await page.getByRole("link", { name: "新建录制" }).click();
@@ -15,7 +15,7 @@ test("scaffold routes are explicit and do not allow fake recording success", asy
 });
 
 test("missing replay id shows an explicit load error", async ({ page }) => {
-  await page.goto("/replay/missing-recording");
+  await page.goto("/replay/missing-recording", { waitUntil: "domcontentloaded" });
   await expect(page.getByText(/加载失败/)).toBeVisible();
   await expect(page.getByText(/incomplete-package/)).toBeVisible();
 });
