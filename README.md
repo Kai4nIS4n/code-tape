@@ -8,9 +8,6 @@
 > [竞品分析](docs/竞品分析)
 -> [技术方案](docs/技术方案.md)
 
-## 开发
-
-
 ## Harness 循环
 
 - Github Actions
