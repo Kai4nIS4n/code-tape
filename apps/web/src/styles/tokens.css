@@ -1,0 +1,61 @@
+/*
+ * code-tape design tokens.
+ *
+ * Authority: docs/技术方案.md §8.3 + ADR-009 (P0 默认深色) + frontend-design 收敛。
+ * 色彩空间使用 OKLCH，让深浅主题在感知亮度上镜像对齐，避免 sRGB 切换时出现的
+ * 突兀对比反转。所有 token 必须经由 themeProvider 与 tailwind.config.ts 暴露，
+ * 业务组件禁止直接写死颜色字面量。
+ */
+
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --ct-color-background: oklch(0.985 0 0);
+  --ct-color-foreground: oklch(0.18 0.012 250);
+  --ct-color-surface: oklch(0.96 0.004 250);
+  --ct-color-surface-raised: oklch(0.99 0 0);
+  --ct-color-border: oklch(0.88 0.005 250);
+  --ct-color-muted: oklch(0.5 0.012 250);
+
+  --ct-color-primary: oklch(0.55 0.16 245);
+  --ct-color-primary-foreground: oklch(0.99 0 0);
+
+  --ct-color-record: oklch(0.55 0.22 25);
+  --ct-color-pause: oklch(0.7 0.16 75);
+  --ct-color-danger: oklch(0.55 0.22 25);
+  --ct-color-warning: oklch(0.7 0.16 75);
+  --ct-color-success: oklch(0.6 0.16 160);
+
+  --ct-color-focus: oklch(0.65 0.2 245);
+  --ct-color-tooltip: oklch(0.2 0.012 250);
+  --ct-color-tooltip-foreground: oklch(0.97 0 0);
+  --ct-color-popover: oklch(0.99 0 0);
+  --ct-color-popover-foreground: oklch(0.18 0.012 250);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --ct-color-background: oklch(0.165 0.012 250);
+  --ct-color-foreground: oklch(0.95 0.005 250);
+  --ct-color-surface: oklch(0.21 0.012 250);
+  --ct-color-surface-raised: oklch(0.25 0.012 250);
+  --ct-color-border: oklch(0.32 0.012 250);
+  --ct-color-muted: oklch(0.65 0.012 250);
+
+  --ct-color-primary: oklch(0.78 0.16 235);
+  --ct-color-primary-foreground: oklch(0.15 0.012 250);
+
+  --ct-color-record: oklch(0.7 0.22 25);
+  --ct-color-pause: oklch(0.82 0.16 80);
+  --ct-color-danger: oklch(0.7 0.22 25);
+  --ct-color-warning: oklch(0.82 0.16 80);
+  --ct-color-success: oklch(0.78 0.16 160);
+
+  --ct-color-focus: oklch(0.82 0.18 230);
+  --ct-color-tooltip: oklch(0.95 0 0);
+  --ct-color-tooltip-foreground: oklch(0.18 0.012 250);
+  --ct-color-popover: oklch(0.21 0.012 250);
+  --ct-color-popover-foreground: oklch(0.95 0.005 250);
+}

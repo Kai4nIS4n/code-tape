@@ -1,0 +1,59 @@
+@import "./fonts.css";
+@import "./tokens.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--ct-color-background);
+    color: var(--ct-color-foreground);
+    font-family:
+      "Geist",
+      ui-sans-serif,
+      system-ui,
+      sans-serif;
+    font-feature-settings:
+      "cv11" on,
+      "ss01" on;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  code,
+  pre,
+  kbd {
+    font-family:
+      "JetBrains Mono",
+      ui-monospace,
+      SFMono-Regular,
+      Menlo,
+      monospace;
+    font-feature-settings: "calt" off;
+  }
+
+  :focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--ct-color-background), 0 0 0 4px var(--ct-color-focus);
+    border-radius: 0.25rem;
+  }
+
+  ::selection {
+    background-color: var(--ct-color-primary);
+    color: var(--ct-color-primary-foreground);
+  }
+}

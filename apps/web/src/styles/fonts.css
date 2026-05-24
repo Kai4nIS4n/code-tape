@@ -1,0 +1,6 @@
+/*
+ * Geist (UI sans) + JetBrains Mono (code mono) by Google Fonts CDN.
+ * 离线场景下 Tailwind 配置中的 fallback (ui-sans-serif / ui-monospace / Menlo)
+ * 会自动接管，不需要额外降级逻辑。
+ */
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
