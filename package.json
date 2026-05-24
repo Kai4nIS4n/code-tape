@@ -1,9 +1,18 @@
 {
-  "name": "code-tape-workflow-automation",
+  "name": "code-tape",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "apps/*"
+  ],
   "scripts": {
-    "test": "node --test scripts/tests/*.test.mjs"
+    "test": "node --test scripts/tests/*.test.mjs",
+    "dev": "npm run dev -w apps/web",
+    "build": "npm run build -w apps/web",
+    "preview": "npm run preview -w apps/web",
+    "test:web": "npm run test -w apps/web",
+    "lint:web": "npm run lint -w apps/web",
+    "e2e:web": "npm run e2e -w apps/web"
   },
   "engines": {
     "node": ">=20"
