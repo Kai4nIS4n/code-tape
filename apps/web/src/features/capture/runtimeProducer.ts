@@ -96,7 +96,6 @@ export const createRuntimeProducer: CreateRuntimeProducer = (deps): RuntimeProdu
     start() {
       if (stopped || disposed) return;
       paused = false;
-      stopped = false;
     },
     pause() {
       if (stopped || disposed) return;

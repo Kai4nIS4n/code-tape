@@ -227,6 +227,17 @@ describe("createRuntimeProducer", () => {
     expect(bus.drain()).toEqual([]);
   });
 
+  it("allows trigger after pause and resume", async () => {
+    const { bus, producer } = setup();
+    producer.pause();
+    producer.resume();
+
+    const result = await producer.trigger({ language: "javascript", source: "1" });
+
+    expect(result.status).toBe("complete");
+    expect(bus.drain().map((event) => event.type)).toEqual(["run-start", "run-output"]);
+  });
+
   it("rejects overlapping trigger calls without emitting a second run", async () => {
     let runCount = 0;
     let resolveFirstRun: () => void = () => {
