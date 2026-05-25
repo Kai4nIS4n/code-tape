@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-05-25T13:16:07Z",
+  "updatedAt": "2026-05-25T13:19:39Z",
   "students": {
     "ceilf6": {
       "activeIssue": 65,
@@ -58,7 +58,7 @@
       "totalScore": 3.25
     },
     "yangchloeeeee": {
-      "activeIssue": null,
+      "activeIssue": 66,
       "completedIssues": [
         4,
         7,
@@ -300,6 +300,20 @@
       "status": "claimed",
       "assignee": "ceilf6",
       "claimedAt": "2026-05-25T13:14:34Z",
+      "closedAt": null,
+      "mergedPr": null
+    },
+    "66": {
+      "number": 66,
+      "title": "[P0] pointerProducer + shortcutProducer 实装",
+      "score": 3,
+      "stack": [
+        "react",
+        "typescript"
+      ],
+      "status": "claimed",
+      "assignee": "yangchloeeeee",
+      "claimedAt": "2026-05-25T13:19:39Z",
       "closedAt": null,
       "mergedPr": null
     },

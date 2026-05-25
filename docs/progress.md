@@ -2,7 +2,7 @@
 
 > 本文件由 GitHub Actions 自动生成，请勿手动修改。
 
-更新时间：2026-05-25T13:16:07Z
+更新时间：2026-05-25T13:19:39Z
 
 ## 当前任务
 
@@ -11,6 +11,7 @@
 | cecilyw | #58 [P0] ReplayControls 播放控制条基础交互 | 2026-05-25 02:48:02Z |
 | JunMang01 | #59 [P0] RecordingLibraryPage 列表 UI 与导入导出入口 | 2026-05-25 02:50:19Z |
 | ceilf6 | #65 [P0] editorProducer 实装：内容/选区/滚动/语言事件采集 | 2026-05-25 13:14:34Z |
+| yangchloeeeee | #66 [P0] pointerProducer + shortcutProducer 实装 | 2026-05-25 13:19:39Z |
 | MINTPIPERAS | #67 [P0] mediaProducer 实装：媒体开关、权限告警与摄像头位置事件 | 2026-05-25 13:16:07Z |
 
 ## 积分总览
