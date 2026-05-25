@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-05-25T02:48:02Z",
+  "updatedAt": "2026-05-25T02:50:19Z",
   "students": {
     "ceilf6": {
       "activeIssue": 55,
@@ -67,7 +67,7 @@
       "totalScore": 3.75
     },
     "JunMang01": {
-      "activeIssue": null,
+      "activeIssue": 59,
       "completedIssues": [
         6
       ],
@@ -237,6 +237,20 @@
       "status": "claimed",
       "assignee": "cecilyw",
       "claimedAt": "2026-05-25T02:48:02Z",
+      "closedAt": null,
+      "mergedPr": null
+    },
+    "59": {
+      "number": 59,
+      "title": "[P0] RecordingLibraryPage 列表 UI 与导入导出入口",
+      "score": 3,
+      "stack": [
+        "react",
+        "typescript"
+      ],
+      "status": "claimed",
+      "assignee": "JunMang01",
+      "claimedAt": "2026-05-25T02:50:19Z",
       "closedAt": null,
       "mergedPr": null
     },
