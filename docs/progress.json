@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-05-25T02:19:31Z",
+  "updatedAt": "2026-05-25T02:50:19Z",
   "students": {
     "ceilf6": {
       "activeIssue": 55,
@@ -23,7 +23,7 @@
       "totalScore": 6.25
     },
     "MINTPIPERAS": {
-      "activeIssue": null,
+      "activeIssue": 60,
       "completedIssues": [
         9
       ],
@@ -51,7 +51,7 @@
       "totalScore": 1.75
     },
     "yangchloeeeee": {
-      "activeIssue": null,
+      "activeIssue": 57,
       "completedIssues": [
         4,
         7
@@ -67,7 +67,7 @@
       "totalScore": 3.75
     },
     "JunMang01": {
-      "activeIssue": null,
+      "activeIssue": 59,
       "completedIssues": [
         6
       ],
@@ -77,6 +77,16 @@
       "reviewScore": 0,
       "penaltyScore": 0,
       "totalScore": 0.75
+    },
+    "cecilyw": {
+      "activeIssue": 58,
+      "completedIssues": [],
+      "reviewedIssues": [],
+      "bugPenalties": [],
+      "developmentScore": 0,
+      "reviewScore": 0,
+      "penaltyScore": 0,
+      "totalScore": 0
     }
   },
   "issues": {
@@ -199,6 +209,62 @@
       "status": "claimed",
       "assignee": "ceilf6",
       "claimedAt": "2026-05-25T02:19:31Z",
+      "closedAt": null,
+      "mergedPr": null
+    },
+    "57": {
+      "number": 57,
+      "title": "[P0] RecorderControls 录制控制条 UI",
+      "score": 3,
+      "stack": [
+        "react",
+        "typescript"
+      ],
+      "status": "claimed",
+      "assignee": "yangchloeeeee",
+      "claimedAt": "2026-05-25T02:42:39Z",
+      "closedAt": null,
+      "mergedPr": null
+    },
+    "58": {
+      "number": 58,
+      "title": "[P0] ReplayControls 播放控制条基础交互",
+      "score": 3,
+      "stack": [
+        "react",
+        "typescript"
+      ],
+      "status": "claimed",
+      "assignee": "cecilyw",
+      "claimedAt": "2026-05-25T02:48:02Z",
+      "closedAt": null,
+      "mergedPr": null
+    },
+    "59": {
+      "number": 59,
+      "title": "[P0] RecordingLibraryPage 列表 UI 与导入导出入口",
+      "score": 3,
+      "stack": [
+        "react",
+        "typescript"
+      ],
+      "status": "claimed",
+      "assignee": "JunMang01",
+      "claimedAt": "2026-05-25T02:50:19Z",
+      "closedAt": null,
+      "mergedPr": null
+    },
+    "60": {
+      "number": 60,
+      "title": "[P0] CameraPreview 悬浮预览 UI",
+      "score": 3,
+      "stack": [
+        "react",
+        "typescript"
+      ],
+      "status": "claimed",
+      "assignee": "MINTPIPERAS",
+      "claimedAt": "2026-05-25T02:22:26Z",
       "closedAt": null,
       "mergedPr": null
     }
