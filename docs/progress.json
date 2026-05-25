@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-05-25T02:22:26Z",
+  "updatedAt": "2026-05-25T02:42:39Z",
   "students": {
     "ceilf6": {
       "activeIssue": 55,
@@ -51,7 +51,7 @@
       "totalScore": 1.75
     },
     "yangchloeeeee": {
-      "activeIssue": null,
+      "activeIssue": 57,
       "completedIssues": [
         4,
         7
@@ -199,6 +199,20 @@
       "status": "claimed",
       "assignee": "ceilf6",
       "claimedAt": "2026-05-25T02:19:31Z",
+      "closedAt": null,
+      "mergedPr": null
+    },
+    "57": {
+      "number": 57,
+      "title": "[P0] RecorderControls 录制控制条 UI",
+      "score": 3,
+      "stack": [
+        "react",
+        "typescript"
+      ],
+      "status": "claimed",
+      "assignee": "yangchloeeeee",
+      "claimedAt": "2026-05-25T02:42:39Z",
       "closedAt": null,
       "mergedPr": null
     },

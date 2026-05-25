@@ -2,13 +2,14 @@
 
 > 本文件由 GitHub Actions 自动生成，请勿手动修改。
 
-更新时间：2026-05-25T02:22:26Z
+更新时间：2026-05-25T02:42:39Z
 
 ## 当前任务
 
 | GitHub 用户 | 当前 Issue | 认领时间 |
 | --- | --- | --- |
 | ceilf6 | #55 [P0] Monaco CodeEditor 基础集成 | 2026-05-25 02:19:31Z |
+| yangchloeeeee | #57 [P0] RecorderControls 录制控制条 UI | 2026-05-25 02:42:39Z |
 | MINTPIPERAS | #60 [P0] CameraPreview 悬浮预览 UI | 2026-05-25 02:22:26Z |
 
 ## 积分总览
