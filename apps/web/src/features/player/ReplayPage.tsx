@@ -86,6 +86,7 @@ export function ReplayPage() {
   const recordedMediaVideoRef = useRef<HTMLVideoElement | null>(null);
   const pointerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const shortcutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentMedia = pkg?.media ?? null;
   const clearOverlayTimers = useCallback(() => {
     if (pointerTimerRef.current) clearTimeout(pointerTimerRef.current);
     if (shortcutTimerRef.current) clearTimeout(shortcutTimerRef.current);
@@ -104,10 +105,18 @@ export function ReplayPage() {
   const playRecordedMedia = useCallback(() => {
     const video = recordedMediaVideoRef.current;
     if (!video) return;
+    const targetMs = timelineToRecordedMediaTime(currentMedia, schedulerState.timelineTimeMs);
+    if (targetMs === null) {
+      video.pause();
+      return;
+    }
+    if (Math.abs(video.currentTime * 1000 - targetMs) > MEDIA_DRIFT_THRESHOLD_MS) {
+      video.currentTime = targetMs / 1000;
+    }
     void video.play().catch((err) => {
       console.warn("[replay-page] recorded media play failed:", err);
     });
-  }, []);
+  }, [currentMedia, schedulerState.timelineTimeMs]);
   const pauseRecordedMedia = useCallback(() => {
     recordedMediaVideoRef.current?.pause();
   }, []);
@@ -182,7 +191,7 @@ export function ReplayPage() {
           <ReplayVisualOverlays state={overlayState} />
           <RecordedMediaOverlay
             videoRef={recordedMediaVideoRef}
-            media={pkg?.media ?? null}
+            media={currentMedia}
             mediaBlob={mediaBlob}
             mediaState={stableState.media}
             schedulerState={schedulerState}
@@ -248,6 +257,17 @@ function overlayStateFromEvents(
     }
   }
   return next;
+}
+
+function timelineToRecordedMediaTime(
+  media: RecordingPackageV1["media"] | null,
+  timelineTimeMs: number,
+): number | null {
+  if (!media) return null;
+  const timelineStartMs = media.timelineOffsetMs;
+  const timelineEndMs = media.timelineOffsetMs + media.durationMs;
+  if (timelineTimeMs < timelineStartMs || timelineTimeMs > timelineEndMs) return null;
+  return timelineTimeMs - timelineStartMs;
 }
 
 function scheduleOverlayCleanup(
