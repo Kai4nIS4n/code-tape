@@ -83,6 +83,7 @@ export function ReplayPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [volume, setVolume] = useState(100);
   const [muted, setMuted] = useState(false);
+  const recordedMediaVideoRef = useRef<HTMLVideoElement | null>(null);
   const pointerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const shortcutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clearOverlayTimers = useCallback(() => {
@@ -100,8 +101,27 @@ export function ReplayPage() {
       },
     });
   }, []);
+  const playRecordedMedia = useCallback(() => {
+    const video = recordedMediaVideoRef.current;
+    if (!video) return;
+    void video.play().catch((err) => {
+      console.warn("[replay-page] recorded media play failed:", err);
+    });
+  }, []);
+  const pauseRecordedMedia = useCallback(() => {
+    recordedMediaVideoRef.current?.pause();
+  }, []);
+  const playReplay = useCallback(() => {
+    playRecordedMedia();
+    scheduler.play();
+  }, [playRecordedMedia, scheduler]);
+  const pauseReplay = useCallback(() => {
+    pauseRecordedMedia();
+    scheduler.pause();
+  }, [pauseRecordedMedia, scheduler]);
 
   useEffect(() => scheduler.subscribe(setSchedulerState), [scheduler]);
+  useEffect(() => () => scheduler.destroy(), [scheduler]);
   useEffect(() => clearOverlayTimers, [clearOverlayTimers]);
 
   useEffect(() => {
@@ -122,7 +142,6 @@ export function ReplayPage() {
     })();
     return () => {
       cancelled = true;
-      scheduler.destroy();
     };
   }, [id, repository, scheduler]);
 
@@ -155,6 +174,7 @@ export function ReplayPage() {
           />
           <ReplayVisualOverlays state={overlayState} />
           <RecordedMediaOverlay
+            videoRef={recordedMediaVideoRef}
             media={pkg?.media ?? null}
             mediaBlob={mediaBlob}
             mediaState={stableState.media}
@@ -172,9 +192,9 @@ export function ReplayPage() {
         state={schedulerState}
         durationMs={pkg?.meta.durationMs ?? 0}
         onPlayPause={() =>
-          schedulerState.status === "playing" ? scheduler.pause() : scheduler.play()
+          schedulerState.status === "playing" ? pauseReplay() : playReplay()
         }
-        onPlay={() => scheduler.play()}
+        onPlay={playReplay}
         onSeek={(target) => scheduler.seek(target)}
         onRate={(rate) => scheduler.setRate(rate)}
         volume={volume}
@@ -269,6 +289,7 @@ function ReplayVisualOverlays({ state }: { state: ReplayOverlayState }) {
 }
 
 function RecordedMediaOverlay({
+  videoRef,
   media,
   mediaBlob,
   mediaState,
@@ -276,6 +297,7 @@ function RecordedMediaOverlay({
   volume,
   muted,
 }: {
+  videoRef: MutableRefObject<HTMLVideoElement | null>;
   media: RecordingPackageV1["media"];
   mediaBlob: Blob | null;
   mediaState: ReplayStableState["media"];
@@ -283,7 +305,6 @@ function RecordedMediaOverlay({
   volume: number;
   muted: boolean;
 }) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
   const [src, setSrc] = useState<string | null>(null);
   const hasMedia = Boolean(media && mediaBlob);
   const hasCamera = Boolean(media?.hasCamera);
@@ -309,7 +330,7 @@ function RecordedMediaOverlay({
         if (videoRef.current) videoRef.current.playbackRate = rate;
       },
     });
-  }, [media]);
+  }, [media, videoRef]);
 
   useEffect(() => {
     if (!mediaBlob || typeof URL.createObjectURL !== "function") {
@@ -326,7 +347,7 @@ function RecordedMediaOverlay({
     if (!video) return;
     video.volume = Math.max(0, Math.min(volume, 100)) / 100;
     video.muted = muted;
-  }, [volume, muted]);
+  }, [volume, muted, videoRef]);
 
   useEffect(() => {
     mediaAdapter?.setRate(schedulerState.playbackRate);
@@ -339,12 +360,10 @@ function RecordedMediaOverlay({
     if (targetMs !== null && Math.abs(video.currentTime * 1000 - targetMs) > MEDIA_DRIFT_THRESHOLD_MS) {
       video.currentTime = targetMs / 1000;
     }
-    if (schedulerState.status === "playing") {
-      void video.play().catch(() => undefined);
-    } else {
+    if (schedulerState.status !== "playing") {
       video.pause();
     }
-  }, [mediaAdapter, schedulerState.status, schedulerState.timelineTimeMs]);
+  }, [mediaAdapter, schedulerState.status, schedulerState.timelineTimeMs, videoRef]);
 
   if (!src || !hasMedia) return null;
 

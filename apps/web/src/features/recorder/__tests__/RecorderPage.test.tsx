@@ -854,7 +854,9 @@ describe("RecorderPage", () => {
     await waitFor(() => expect(downloadApis.createObjectURL).toHaveBeenCalledWith(expect.any(Blob)));
     expect(downloadApis.click).toHaveBeenCalledTimes(1);
     expect(recorderPageMock.navigate).not.toHaveBeenCalled();
-    expect(await screen.findByRole("status")).toHaveTextContent("save-draft-failed");
+    await waitFor(() => expect(screen.getByRole("button", { name: "开始录制" })).not.toBeDisabled());
+    expect(screen.getByRole("button", { name: "停止录制" })).toBeDisabled();
+    expect(recorderPageMock.devices.release).toHaveBeenCalled();
 
     warn.mockRestore();
     downloadApis.click.mockRestore();

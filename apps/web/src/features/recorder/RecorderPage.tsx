@@ -357,11 +357,25 @@ export function RecorderPage() {
     } catch (error) {
       if (mountedRef.current && stopTokenRef.current === stopToken) {
         console.warn("[recorder-page] stop failed:", error);
+        await resetAfterStopFailure();
         return;
       }
       stack.controller.reset();
       console.warn("[recorder-page] stop ignored after unmount:", error);
     }
+  };
+  const resetAfterStopFailure = async () => {
+    const recorder = mediaRecorderRef.current;
+    mediaRecorderRef.current = null;
+    await recorder?.stop().catch((err) => {
+      console.warn("[recorder-page] cleanup media stop after failure failed:", err);
+    });
+    stack.devices.release();
+    setMediaStream(null);
+    setMicrophoneEnabled(false);
+    setCameraEnabled(false);
+    stack.setCurrentMediaCapability(INITIAL_CONTROLLER_STATE.mediaCapability);
+    stack.controller.reset();
   };
   const handlePause = () => {
     if (stack.controller.state.status !== "recording") return;
