@@ -34,7 +34,8 @@ function runBootstrap() {
   execFileSync('node', ['scripts/workflows/install-hooks.mjs'], { stdio: 'inherit' });
   console.log('Agent bootstrap complete.');
   console.log('- Before editing code: run npm run quality:predev');
-  console.log('- Before submitting or pushing code: run npm run quality:local');
+  console.log('- Before committing code: run npm run quality:precommit');
+  console.log('- Before pushing or submitting code: run npm run quality:local');
   console.log('- For critical skeleton changes: read GitNexus detect_changes/query/context/impact output');
   console.log('- Local git hooks run quality gates; CI remains the final contract gate.');
 }
@@ -79,11 +80,12 @@ function getImpactSummary() {
 
 function runGitNexusAnalyze(mode) {
   const timeoutMs = resolveGitNexusAnalyzeTimeoutMs(mode);
+  const { command, args } = getGitNexusAnalyzeInvocation();
   console.log(
     `Running GitNexus ${GITNEXUS_VERSION} analyze --force --index-only (${mode}, timeout ${timeoutMs}ms)...`,
   );
   try {
-    execFileSync('npx', ['--yes', `gitnexus@${GITNEXUS_VERSION}`, 'analyze', '--force', '--index-only'], {
+    execFileSync(command, args, {
       stdio: 'inherit',
       timeout: timeoutMs,
     });
@@ -95,6 +97,14 @@ function runGitNexusAnalyze(mode) {
     }
     throw err;
   }
+}
+
+function getGitNexusAnalyzeInvocation() {
+  const args = ['--yes', `gitnexus@${GITNEXUS_VERSION}`, 'analyze', '--force', '--index-only'];
+  if (process.platform === 'win32') {
+    return { command: 'cmd.exe', args: ['/d', '/s', '/c', 'npx.cmd', ...args] };
+  }
+  return { command: 'npx', args };
 }
 
 function resolveGitNexusAnalyzeTimeoutMs(mode) {
