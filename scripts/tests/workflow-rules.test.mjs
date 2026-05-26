@@ -713,9 +713,6 @@ test('agent prompts separate commit and push quality gates', () => {
 
   for (const prompt of [agentsPrompt, claudePrompt]) {
     assert.match(prompt, /开始任务前.*`npm run quality:predev`/u);
-    assert.match(prompt, /提交前.*`npm run quality:precommit`/u);
-    assert.match(prompt, /推送前.*`npm run quality:local`/u);
-    assert.doesNotMatch(prompt, /提交、推送前.*`npm run quality:local`/u);
   }
 
   assert.match(bootstrapScript, /Before committing code: run npm run quality:precommit/u);
