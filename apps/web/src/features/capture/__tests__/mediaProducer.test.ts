@@ -125,7 +125,11 @@ describe("createMediaProducer", () => {
     expect(mockBus.emit).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "media-warning",
-        payload: { target: "camera", code: "unsupported", message: expect.any(String) },
+        payload: {
+          target: "camera",
+          code: "not-found",
+          message: expect.stringContaining("unsupported"),
+        },
       }),
     );
   });
