@@ -10,6 +10,7 @@ export type ReplayControlsProps = {
   state: ReplaySchedulerState;
   durationMs: number;
   onPlayPause(): void;
+  onPlay(): void;
   onSeek(targetMs: number): Promise<void> | void;
   onRate(rate: ReplayPlaybackRate): void;
   volume: number;
@@ -24,6 +25,7 @@ export function ReplayControls({
   state,
   durationMs,
   onPlayPause,
+  onPlay,
   onSeek,
   onRate,
   volume,
@@ -33,12 +35,15 @@ export function ReplayControls({
 }: ReplayControlsProps) {
   const [ratePopoverOpen, setRatePopoverOpen] = useState(false);
   const [volumePopoverOpen, setVolumePopoverOpen] = useState(false);
+  const [pendingProgressPercent, setPendingProgressPercent] = useState<number | null>(null);
   const rateCloseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const volumeCloseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isPlaying = state.status === "playing";
   const safeDuration = Math.max(0, durationMs);
-  const currentTime = Math.min(Math.max(0, state.timelineTimeMs), safeDuration);
-  const progressPercent = safeDuration > 0 ? (currentTime / safeDuration) * 100 : 0;
+  const baseCurrentTime = Math.min(Math.max(0, state.timelineTimeMs), safeDuration);
+  const baseProgressPercent = safeDuration > 0 ? (baseCurrentTime / safeDuration) * 100 : 0;
+  const currentProgressPercent = pendingProgressPercent ?? baseProgressPercent;
+  const currentTime = (currentProgressPercent / 100) * safeDuration;
 
   useEffect(() => {
     return () => {
@@ -76,15 +81,16 @@ export function ReplayControls({
   };
 
   const handleSliderChange = (value: number) => {
-    const targetMs = (value / 100) * safeDuration;
-    onSeek(targetMs);
+    setPendingProgressPercent(value);
   };
 
   const handleSliderCommit = async (value: number) => {
     const targetMs = (value / 100) * safeDuration;
+    const initialStatus = state.status;
+    setPendingProgressPercent(null);
     await onSeek(targetMs);
-    if (!isPlaying && state.status !== "error" && state.status !== "loading") {
-      onPlayPause();
+    if (initialStatus !== "error" && initialStatus !== "loading") {
+      onPlay();
     }
   };
 
@@ -118,7 +124,7 @@ export function ReplayControls({
 
       <div className="flex-1 min-w-[120px]">
         <Slider
-          value={progressPercent}
+          value={currentProgressPercent}
           min={0}
           max={100}
           step={0.1}
@@ -147,6 +153,10 @@ export function ReplayControls({
               align="center"
               side="top"
               sideOffset={10}
+              onMouseEnter={() => {
+                if (rateCloseTimeoutRef.current) clearTimeout(rateCloseTimeoutRef.current);
+              }}
+              onMouseLeave={closeRatePopover}
               className={cn(
                 "z-50 w-16 rounded-sm border border-border bg-surface p-1 text-foreground shadow-elevation-2",
                 "outline-none data-[state=delayed-open]:animate-fade-in",
@@ -192,6 +202,10 @@ export function ReplayControls({
               align="center"
               side="top"
               sideOffset={10}
+              onMouseEnter={() => {
+                if (volumeCloseTimeoutRef.current) clearTimeout(volumeCloseTimeoutRef.current);
+              }}
+              onMouseLeave={closeVolumePopover}
               className={cn(
                 "z-50 w-12 rounded-sm border border-border bg-surface p-2 text-foreground shadow-elevation-2",
                 "outline-none data-[state=delayed-open]:animate-fade-in",
