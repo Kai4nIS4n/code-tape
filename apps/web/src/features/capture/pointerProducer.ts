@@ -6,24 +6,33 @@ export const createPointerProducer: CreatePointerProducer = (deps) => {
   let active = false;
   let disposed = false;
   let host: HTMLElement | null = null;
+  let documentTarget: Document | null = null;
   let lastMoveEmittedAt = -Infinity;
 
   const detach = () => {
-    if (!host) return;
-    host.removeEventListener("pointermove", handlePointerMove);
-    host.removeEventListener("pointerdown", handlePointerDown);
+    if (documentTarget) {
+      documentTarget.removeEventListener("pointermove", handlePointerMove, true);
+      documentTarget.removeEventListener("pointerdown", handlePointerDown, true);
+      documentTarget = null;
+    }
     host = null;
   };
 
   const attachCurrentHost = () => {
     if (!active || disposed) return;
     const nextHost = deps.getHost();
+    const nextDocument = nextHost?.ownerDocument ?? document;
+    if (nextDocument !== documentTarget) {
+      if (documentTarget) {
+        documentTarget.removeEventListener("pointermove", handlePointerMove, true);
+        documentTarget.removeEventListener("pointerdown", handlePointerDown, true);
+      }
+      documentTarget = nextDocument;
+      documentTarget?.addEventListener("pointermove", handlePointerMove, true);
+      documentTarget?.addEventListener("pointerdown", handlePointerDown, true);
+    }
     if (nextHost === host) return;
-    detach();
     host = nextHost;
-    if (!host) return;
-    host.addEventListener("pointermove", handlePointerMove);
-    host.addEventListener("pointerdown", handlePointerDown);
   };
 
   const payloadFromEvent = (event: PointerEvent) => {
@@ -41,10 +50,16 @@ export const createPointerProducer: CreatePointerProducer = (deps) => {
     };
   };
 
+  const isInsideHost = (event: Event): boolean => {
+    const currentHost = host;
+    const target = event.target;
+    return Boolean(currentHost && target instanceof Node && currentHost.contains(target));
+  };
+
   function handlePointerMove(event: PointerEvent) {
     attachCurrentHost();
     if (!active || disposed) return;
-    if (event.currentTarget !== host) return;
+    if (!isInsideHost(event)) return;
     const emittedAt = event.timeStamp ?? Date.now();
     if (emittedAt - lastMoveEmittedAt < POINTER_MOVE_THROTTLE_MS) return;
     const payload = payloadFromEvent(event);
@@ -61,7 +76,7 @@ export const createPointerProducer: CreatePointerProducer = (deps) => {
   function handlePointerDown(event: PointerEvent) {
     attachCurrentHost();
     if (!active || disposed || !isRecordedButton(event.button)) return;
-    if (event.currentTarget !== host) return;
+    if (!isInsideHost(event)) return;
     const payload = payloadFromEvent(event);
     if (!payload) return;
     deps.bus.emit({

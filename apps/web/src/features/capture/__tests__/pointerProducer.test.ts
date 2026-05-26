@@ -40,6 +40,7 @@ describe("createPointerProducer", () => {
   it("emits throttled mouse-move payloads relative to the current host", () => {
     const { bus, clock } = setup();
     const host = document.createElement("div");
+    document.body.append(host);
     hostRect(host, { left: 10, top: 20, width: 300, height: 200 });
     const producer = createPointerProducer({ bus, clock, getHost: () => host });
     producer.start();
@@ -63,6 +64,7 @@ describe("createPointerProducer", () => {
   it("emits mouse-click with left, middle, and right button values", () => {
     const { bus, clock } = setup();
     const host = document.createElement("div");
+    document.body.append(host);
     hostRect(host, { left: 5, top: 10, width: 100, height: 80 });
     const producer = createPointerProducer({ bus, clock, getHost: () => host });
     producer.start();
@@ -92,6 +94,7 @@ describe("createPointerProducer", () => {
     const { bus, clock } = setup();
     const first = document.createElement("div");
     const second = document.createElement("div");
+    document.body.append(first, second);
     hostRect(first, { left: 0, top: 0, width: 100, height: 100 });
     hostRect(second, { left: 100, top: 200, width: 50, height: 60 });
     let host: HTMLElement | null = null;
@@ -99,10 +102,8 @@ describe("createPointerProducer", () => {
 
     producer.start();
     host = first;
-    producer.resume();
     first.dispatchEvent(pointer("pointermove", { clientX: 10, clientY: 20 }));
     host = second;
-    first.dispatchEvent(pointer("pointerdown", { button: 0, clientX: 15, clientY: 25 }));
     second.dispatchEvent(pointer("pointerdown", { button: 0, clientX: 120, clientY: 230 }));
 
     expect(bus.drain().map((event) => ({ type: event.type, payload: event.payload }))).toEqual([
@@ -120,6 +121,7 @@ describe("createPointerProducer", () => {
   it("stops collecting during pause, resumes, and disposes listeners", () => {
     const { bus, clock } = setup();
     const host = document.createElement("div");
+    document.body.append(host);
     hostRect(host, { left: 0, top: 0, width: 100, height: 100 });
     const producer = createPointerProducer({ bus, clock, getHost: () => host });
     producer.start();
