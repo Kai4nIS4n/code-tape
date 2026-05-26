@@ -1,13 +1,24 @@
-import { useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type MutableRefObject,
+  type SetStateAction,
+} from "react";
 import { Link, useParams } from "react-router-dom";
 import { createReplayScheduler, defaultTickStrategy } from "./replayScheduler";
 import { createTimelineClock } from "./timelineClock";
 import { ReplayControls } from "./ReplayControls";
+import { createMediaClockAdapter } from "./mediaClockAdapter";
 import { CodeEditor } from "@/features/editor/CodeEditor";
 import { PreviewPane } from "@/features/runtime-preview/PreviewPane";
 import { createIframeRuntime } from "@/features/runtime-preview/iframeRuntime";
 import { createRecordingStore } from "@/features/library/recordingStore";
 import type {
+  RecordingEvent,
   RecordingPackageV1,
   ReplaySchedulerState,
   ReplayStableState,
@@ -38,40 +49,100 @@ const INITIAL_STABLE_STATE: ReplayStableState = {
   runtime: { status: "idle", stdout: [], stderr: [], previewHtml: null, errorMessage: null },
 };
 
+type ReplayOverlayState = {
+  pointer: {
+    id: string;
+    xPercent: number;
+    yPercent: number;
+    clicked: boolean;
+  } | null;
+  shortcut: {
+    id: string;
+    label: string;
+  } | null;
+};
+
+const EMPTY_OVERLAY_STATE: ReplayOverlayState = { pointer: null, shortcut: null };
+const TRANSIENT_OVERLAY_TTL_MS = 900;
+const MEDIA_DRIFT_THRESHOLD_MS = 250;
+
 /**
  * ReplayPage — wires the replay core (scheduler + clock + repository + runtime)
  * and renders the playback layout.
- *
- * Mouse laser, shortcut badge overlay, and chapter marker tooltips remain layered
- * on top of the scheduler's transient event stream.
  */
 export function ReplayPage() {
   const { id } = useParams();
   const repository = useMemo(() => createRecordingStore(), []);
   const runtime = useMemo(() => createIframeRuntime(), []);
+  const [schedulerState, setSchedulerState] =
+    useState<ReplaySchedulerState>(INITIAL_SCHEDULER_STATE);
+  const [stableState, setStableState] = useState<ReplayStableState>(INITIAL_STABLE_STATE);
+  const [overlayState, setOverlayState] = useState<ReplayOverlayState>(EMPTY_OVERLAY_STATE);
+  const [pkg, setPkg] = useState<RecordingPackageV1 | null>(null);
+  const [mediaBlob, setMediaBlob] = useState<Blob | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [volume, setVolume] = useState(100);
+  const [muted, setMuted] = useState(false);
+  const recordedMediaVideoRef = useRef<HTMLVideoElement | null>(null);
+  const pointerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const shortcutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentMedia = pkg?.media ?? null;
+  const clearOverlayTimers = useCallback(() => {
+    if (pointerTimerRef.current) clearTimeout(pointerTimerRef.current);
+    if (shortcutTimerRef.current) clearTimeout(shortcutTimerRef.current);
+  }, []);
   const scheduler = useMemo(() => {
     return createReplayScheduler({
       clock: createTimelineClock(),
       tickStrategy: defaultTickStrategy(),
-      onTick: (state) => {
+      onTick: (state, transientEvents = []) => {
         setStableState(state);
+        setOverlayState((current) => overlayStateFromEvents(current, transientEvents));
+        scheduleOverlayCleanup(transientEvents, setOverlayState, pointerTimerRef, shortcutTimerRef);
       },
     });
   }, []);
-
-  const [schedulerState, setSchedulerState] =
-    useState<ReplaySchedulerState>(INITIAL_SCHEDULER_STATE);
-  const [stableState, setStableState] = useState<ReplayStableState>(INITIAL_STABLE_STATE);
-  const [pkg, setPkg] = useState<RecordingPackageV1 | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [volume, setVolume] = useState(100);
-  const [muted, setMuted] = useState(false);
+  const playRecordedMedia = useCallback(() => {
+    const video = recordedMediaVideoRef.current;
+    if (!video) return;
+    const targetMs = timelineToRecordedMediaTime(currentMedia, schedulerState.timelineTimeMs);
+    if (targetMs === null) {
+      video.pause();
+      return;
+    }
+    if (Math.abs(video.currentTime * 1000 - targetMs) > MEDIA_DRIFT_THRESHOLD_MS) {
+      video.currentTime = targetMs / 1000;
+    }
+    void video.play().catch((err) => {
+      console.warn("[replay-page] recorded media play failed:", err);
+    });
+  }, [currentMedia, schedulerState.timelineTimeMs]);
+  const pauseRecordedMedia = useCallback(() => {
+    recordedMediaVideoRef.current?.pause();
+  }, []);
+  const playReplay = useCallback(() => {
+    playRecordedMedia();
+    scheduler.play();
+  }, [playRecordedMedia, scheduler]);
+  const pauseReplay = useCallback(() => {
+    pauseRecordedMedia();
+    scheduler.pause();
+  }, [pauseRecordedMedia, scheduler]);
 
   useEffect(() => scheduler.subscribe(setSchedulerState), [scheduler]);
+  useEffect(() => () => scheduler.destroy(), [scheduler]);
+  useEffect(() => clearOverlayTimers, [clearOverlayTimers]);
 
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
+    setLoadError(null);
+    setPkg(null);
+    setMediaBlob(null);
+    setStableState(INITIAL_STABLE_STATE);
+    setOverlayState(EMPTY_OVERLAY_STATE);
+    clearOverlayTimers();
+    recordedMediaVideoRef.current?.pause();
     (async () => {
       const result = await repository.load(id);
       if (cancelled) return;
@@ -82,13 +153,13 @@ export function ReplayPage() {
         return;
       }
       setPkg(result.package);
+      setMediaBlob(result.mediaBlob);
       await scheduler.load(result.package);
     })();
     return () => {
       cancelled = true;
-      scheduler.destroy();
     };
-  }, [id, repository, scheduler]);
+  }, [clearOverlayTimers, id, repository, scheduler]);
 
   if (loadError) {
     return (
@@ -117,6 +188,16 @@ export function ReplayPage() {
             scrollTop={stableState.editor.scrollTop}
             scrollLeft={stableState.editor.scrollLeft}
           />
+          <ReplayVisualOverlays state={overlayState} />
+          <RecordedMediaOverlay
+            videoRef={recordedMediaVideoRef}
+            media={currentMedia}
+            mediaBlob={mediaBlob}
+            mediaState={stableState.media}
+            schedulerState={schedulerState}
+            volume={volume}
+            muted={muted}
+          />
         </div>
         <div className="flex min-h-0 flex-col">
           <PreviewPane runtime={runtime} previewHtml={stableState.runtime.previewHtml} className="min-h-0 flex-1" />
@@ -127,9 +208,9 @@ export function ReplayPage() {
         state={schedulerState}
         durationMs={pkg?.meta.durationMs ?? 0}
         onPlayPause={() =>
-          schedulerState.status === "playing" ? scheduler.pause() : scheduler.play()
+          schedulerState.status === "playing" ? pauseReplay() : playReplay()
         }
-        onPlay={() => scheduler.play()}
+        onPlay={playReplay}
         onSeek={(target) => scheduler.seek(target)}
         onRate={(rate) => scheduler.setRate(rate)}
         volume={volume}
@@ -142,6 +223,208 @@ export function ReplayPage() {
           setMuted(m);
           scheduler.setMuted(m);
         }}
+      />
+    </div>
+  );
+}
+
+function overlayStateFromEvents(
+  current: ReplayOverlayState,
+  transientEvents: RecordingEvent[],
+): ReplayOverlayState {
+  let next = current;
+  for (const event of transientEvents) {
+    if (event.type === "mouse-move" || event.type === "mouse-click") {
+      const { x, y, containerWidth, containerHeight } = event.payload;
+      next = {
+        ...next,
+        pointer: {
+          id: event.id,
+          xPercent: containerWidth > 0 ? (x / containerWidth) * 100 : 0,
+          yPercent: containerHeight > 0 ? (y / containerHeight) * 100 : 0,
+          clicked: event.type === "mouse-click",
+        },
+      };
+    }
+    if (event.type === "shortcut") {
+      next = {
+        ...next,
+        shortcut: {
+          id: event.id,
+          label: event.payload.label,
+        },
+      };
+    }
+  }
+  return next;
+}
+
+function timelineToRecordedMediaTime(
+  media: RecordingPackageV1["media"] | null,
+  timelineTimeMs: number,
+): number | null {
+  if (!media) return null;
+  const timelineStartMs = media.timelineOffsetMs;
+  const timelineEndMs = media.timelineOffsetMs + media.durationMs;
+  if (timelineTimeMs < timelineStartMs || timelineTimeMs > timelineEndMs) return null;
+  return timelineTimeMs - timelineStartMs;
+}
+
+function scheduleOverlayCleanup(
+  transientEvents: RecordingEvent[],
+  setOverlayState: Dispatch<SetStateAction<ReplayOverlayState>>,
+  pointerTimerRef: MutableRefObject<ReturnType<typeof setTimeout> | null>,
+  shortcutTimerRef: MutableRefObject<ReturnType<typeof setTimeout> | null>,
+) {
+  const hasPointer = transientEvents.some((event) => event.type === "mouse-move" || event.type === "mouse-click");
+  const hasShortcut = transientEvents.some((event) => event.type === "shortcut");
+  if (hasPointer) {
+    if (pointerTimerRef.current) clearTimeout(pointerTimerRef.current);
+    pointerTimerRef.current = setTimeout(() => {
+      setOverlayState((current) => ({ ...current, pointer: null }));
+    }, TRANSIENT_OVERLAY_TTL_MS);
+  }
+  if (hasShortcut) {
+    if (shortcutTimerRef.current) clearTimeout(shortcutTimerRef.current);
+    shortcutTimerRef.current = setTimeout(() => {
+      setOverlayState((current) => ({ ...current, shortcut: null }));
+    }, TRANSIENT_OVERLAY_TTL_MS);
+  }
+}
+
+function ReplayVisualOverlays({ state }: { state: ReplayOverlayState }) {
+  return (
+    <div className="pointer-events-none absolute inset-0 z-40 overflow-hidden">
+      {state.pointer ? (
+        <div
+          aria-label="回放鼠标位置"
+          className="absolute h-5 w-5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-primary bg-primary/20 shadow-[0_0_24px_var(--ct-color-primary)]"
+          style={{ left: `${state.pointer.xPercent}%`, top: `${state.pointer.yPercent}%` }}
+        >
+          {state.pointer.clicked ? (
+            <span className="absolute inset-[-10px] rounded-full border border-primary/70 animate-ping" />
+          ) : null}
+        </div>
+      ) : null}
+      {state.shortcut ? (
+        <div className="absolute bottom-4 right-4 rounded-md border border-border bg-popover px-3 py-2 font-mono text-sm text-popover-foreground shadow-elevation-2">
+          {state.shortcut.label}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function RecordedMediaOverlay({
+  videoRef,
+  media,
+  mediaBlob,
+  mediaState,
+  schedulerState,
+  volume,
+  muted,
+}: {
+  videoRef: MutableRefObject<HTMLVideoElement | null>;
+  media: RecordingPackageV1["media"];
+  mediaBlob: Blob | null;
+  mediaState: ReplayStableState["media"];
+  schedulerState: ReplaySchedulerState;
+  volume: number;
+  muted: boolean;
+}) {
+  const [src, setSrc] = useState<string | null>(null);
+  const hasMedia = Boolean(media && mediaBlob);
+  const hasCamera = Boolean(media?.hasCamera);
+  const mediaAdapter = useMemo(() => {
+    if (!media) return null;
+    return createMediaClockAdapter({
+      segments: [
+        {
+          blobId: media.blobId,
+          timelineStartMs: media.timelineOffsetMs,
+          timelineEndMs: media.timelineOffsetMs + media.durationMs,
+          mediaStartMs: 0,
+          mediaEndMs: media.durationMs,
+        },
+      ],
+      seekHandler: (_segment, mediaTimeMs) => {
+        const video = videoRef.current;
+        if (!video) return;
+        video.currentTime = mediaTimeMs / 1000;
+      },
+      rateHandler: (rate) => {
+        if (videoRef.current) videoRef.current.playbackRate = rate;
+      },
+    });
+  }, [media, videoRef]);
+  const activeMediaTimeMs = mediaAdapter?.timelineToMediaTime(schedulerState.timelineTimeMs) ?? null;
+  const isMediaSegmentActive = hasMedia && activeMediaTimeMs !== null;
+  const showCamera = isMediaSegmentActive && hasCamera && mediaState.cameraEnabled;
+
+  useEffect(() => {
+    if (!mediaBlob || typeof URL.createObjectURL !== "function") {
+      setSrc(null);
+      return undefined;
+    }
+    const url = URL.createObjectURL(mediaBlob);
+    setSrc(url);
+    return () => URL.revokeObjectURL(url);
+  }, [mediaBlob]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.volume = Math.max(0, Math.min(volume, 100)) / 100;
+    video.muted = muted;
+  }, [volume, muted, videoRef]);
+
+  useEffect(() => {
+    mediaAdapter?.setRate(schedulerState.playbackRate);
+  }, [mediaAdapter, schedulerState.playbackRate]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !mediaAdapter) return;
+    const targetMs = mediaAdapter.timelineToMediaTime(schedulerState.timelineTimeMs);
+    if (targetMs === null) {
+      video.pause();
+      return;
+    }
+    if (Math.abs(video.currentTime * 1000 - targetMs) > MEDIA_DRIFT_THRESHOLD_MS) {
+      video.currentTime = targetMs / 1000;
+    }
+    if (schedulerState.status === "playing") {
+      void video.play().catch((err) => {
+        console.warn("[replay-page] recorded media play failed:", err);
+      });
+    } else {
+      video.pause();
+    }
+  }, [mediaAdapter, schedulerState.status, schedulerState.timelineTimeMs, src, videoRef]);
+
+  if (!src || !hasMedia) return null;
+
+  const style = {
+    left: `${mediaState.cameraPosition.x * 100}%`,
+    top: `${mediaState.cameraPosition.y * 100}%`,
+    transform: `translate(-${mediaState.cameraPosition.x * 100}%, -${mediaState.cameraPosition.y * 100}%)`,
+  };
+
+  return (
+    <div
+      className={
+        showCamera
+          ? "pointer-events-none absolute z-30 h-32 w-32 overflow-hidden rounded-full border border-border bg-surface-raised shadow-elevation-2"
+          : "sr-only"
+      }
+      style={showCamera ? style : undefined}
+    >
+      <video
+        ref={videoRef}
+        aria-label={hasCamera ? "录制摄像头视频" : "录制音频"}
+        src={src}
+        className="h-full w-full object-cover"
+        playsInline
       />
     </div>
   );

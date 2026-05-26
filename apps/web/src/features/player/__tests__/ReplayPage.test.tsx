@@ -1,21 +1,27 @@
-import { act, render, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplayControlsProps } from "../ReplayControls";
 import type { CodeEditorProps } from "@/features/editor/CodeEditor";
 import type { PreviewPaneProps } from "@/features/runtime-preview/PreviewPane";
-import type { ReplayStableState } from "@/shared/recording-schema";
+import type {
+  RecordingEvent,
+  RecordingPackageV1,
+  RecordingRepository,
+  ReplaySchedulerState,
+  ReplayStableState,
+} from "@/shared/recording-schema";
 import type * as ReactRouterDom from "react-router-dom";
 
 const replayPageMock = vi.hoisted(() => {
-  const schedulerState = {
-    status: "ready" as const,
+  const schedulerState: ReplaySchedulerState = {
+    status: "ready",
     timelineTimeMs: 0,
-    playbackRate: 1 as const,
+    playbackRate: 1,
     lastAppliedSeq: 0,
-    mediaStatus: "none" as const,
+    mediaStatus: "none",
     driftMs: 0,
   };
-  const packageData = {
+  const packageData: RecordingPackageV1 = {
     schemaVersion: "0.1.0",
     manifest: {
       packageId: "recording-1",
@@ -45,7 +51,15 @@ const replayPageMock = vi.hoisted(() => {
     },
     events: [],
     snapshots: [],
-    media: null,
+    media: {
+      blobId: "blob-1",
+      mimeType: "video/webm",
+      durationMs: 120_000,
+      sizeBytes: 4,
+      timelineOffsetMs: 0,
+      hasAudio: true,
+      hasCamera: true,
+    },
   };
   const scheduler = {
     load: vi.fn(async () => {}),
@@ -62,17 +76,24 @@ const replayPageMock = vi.hoisted(() => {
     }),
   };
   const repository = {
-    load: vi.fn(async () => ({ ok: true as const, package: packageData, warnings: [] })),
+    load: vi.fn<RecordingRepository["load"]>(async () => ({
+      ok: true as const,
+      package: packageData,
+      mediaBlob: new Blob(["webm"], { type: "video/webm" }),
+      warnings: [],
+    })),
   };
 
   return {
     scheduler,
+    schedulerState,
     repository,
     packageData,
+    routeId: "recording-1",
     controlsProps: null as ReplayControlsProps | null,
     codeEditorProps: null as CodeEditorProps | null,
     previewPaneProps: null as PreviewPaneProps | null,
-    onTick: null as ((state: ReplayStableState) => void) | null,
+    onTick: null as ((state: ReplayStableState, events?: RecordingEvent[], timelineTimeMs?: number) => void) | null,
     reset() {
       scheduler.load.mockClear();
       scheduler.play.mockClear();
@@ -83,7 +104,14 @@ const replayPageMock = vi.hoisted(() => {
       scheduler.setMuted.mockClear();
       scheduler.destroy.mockClear();
       scheduler.subscribe.mockClear();
+      schedulerState.status = "ready";
+      schedulerState.timelineTimeMs = 0;
+      schedulerState.playbackRate = 1;
+      schedulerState.lastAppliedSeq = 0;
+      schedulerState.mediaStatus = "none";
+      schedulerState.driftMs = 0;
       repository.load.mockClear();
+      this.routeId = "recording-1";
       this.controlsProps = null;
       this.codeEditorProps = null;
       this.previewPaneProps = null;
@@ -96,7 +124,7 @@ vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof ReactRouterDom>("react-router-dom");
   return {
     ...actual,
-    useParams: () => ({ id: "recording-1" }),
+    useParams: () => ({ id: replayPageMock.routeId }),
   };
 });
 
@@ -123,7 +151,7 @@ vi.mock("@/features/library/recordingStore", () => ({
 }));
 
 vi.mock("../replayScheduler", () => ({
-  createReplayScheduler: vi.fn((options: { onTick?: (state: ReplayStableState) => void }) => {
+  createReplayScheduler: vi.fn((options: { onTick?: (state: ReplayStableState, events?: RecordingEvent[], timelineTimeMs?: number) => void }) => {
     replayPageMock.onTick = options.onTick ?? null;
     return replayPageMock.scheduler;
   }),
@@ -227,4 +255,347 @@ describe("ReplayPage", () => {
     expect(document.body).toHaveTextContent("warn");
     expect(document.body).toHaveTextContent("boom");
   });
+
+  it("renders transient pointer and shortcut overlays from scheduler ticks", async () => {
+    const { ReplayPage } = await import("../ReplayPage");
+
+    render(<ReplayPage />);
+    await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData));
+
+    act(() => {
+      replayPageMock.onTick?.(
+        {
+          editor: {
+            code: "",
+            language: "javascript",
+            cursor: null,
+            selection: null,
+            scrollTop: 0,
+            scrollLeft: 0,
+            fontSize: 14,
+            theme: "dark",
+          },
+          pointer: null,
+          media: { microphoneEnabled: true, cameraEnabled: true, cameraPosition: { x: 0.8, y: 0.75 } },
+          runtime: { status: "idle", stdout: [], stderr: [], previewHtml: null, errorMessage: null },
+        },
+        [
+          {
+            id: "move-1",
+            seq: 1,
+            timestampMs: 100,
+            source: "pointer",
+            track: "ui",
+            type: "mouse-move",
+            payload: { x: 50, y: 20, containerWidth: 100, containerHeight: 80 },
+          },
+          {
+            id: "shortcut-1",
+            seq: 2,
+            timestampMs: 120,
+            source: "shortcut",
+            track: "ui",
+            type: "shortcut",
+            payload: { keys: ["Cmd", "/"], label: "Comment", command: "comment" },
+          },
+        ],
+        120,
+      );
+    });
+
+    expect(screen.getByLabelText("回放鼠标位置")).toBeInTheDocument();
+    expect(screen.getByText("Comment")).toBeInTheDocument();
+  });
+
+  it("renders recorded camera media when the package has a camera track", async () => {
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    if (typeof URL.createObjectURL !== "function") {
+      Object.defineProperty(URL, "createObjectURL", {
+        writable: true,
+        value: vi.fn(() => "blob:replay-media"),
+      });
+    }
+    if (typeof URL.revokeObjectURL !== "function") {
+      Object.defineProperty(URL, "revokeObjectURL", {
+        writable: true,
+        value: vi.fn(),
+      });
+    }
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:replay-media");
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const { ReplayPage } = await import("../ReplayPage");
+
+    render(<ReplayPage />);
+    await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData));
+
+    act(() => {
+      replayPageMock.onTick?.({
+        editor: {
+          code: "",
+          language: "javascript",
+          cursor: null,
+          selection: null,
+          scrollTop: 0,
+          scrollLeft: 0,
+          fontSize: 14,
+          theme: "dark",
+        },
+        pointer: null,
+        media: { microphoneEnabled: true, cameraEnabled: true, cameraPosition: { x: 0.8, y: 0.75 } },
+        runtime: { status: "idle", stdout: [], stderr: [], previewHtml: null, errorMessage: null },
+      });
+    });
+
+    const video = screen.getByLabelText("录制摄像头视频") as HTMLVideoElement;
+    expect(video).toHaveAttribute("src", "blob:replay-media");
+    expect(createObjectURL).toHaveBeenCalled();
+    createObjectURL.mockRestore();
+    revokeObjectURL.mockRestore();
+    pause.mockRestore();
+  });
+
+  it("keeps the scheduler subscription alive when the replay id changes", async () => {
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    const { ReplayPage } = await import("../ReplayPage");
+
+    const { rerender } = render(<ReplayPage />);
+    await waitFor(() => expect(replayPageMock.repository.load).toHaveBeenCalledWith("recording-1"));
+
+    replayPageMock.routeId = "recording-2";
+    rerender(<ReplayPage />);
+
+    await waitFor(() => expect(replayPageMock.repository.load).toHaveBeenCalledWith("recording-2"));
+    expect(replayPageMock.scheduler.destroy).not.toHaveBeenCalled();
+    expect(replayPageMock.scheduler.subscribe).toHaveBeenCalledTimes(1);
+    pause.mockRestore();
+  });
+
+  it("clears a load error when navigating to another replay id", async () => {
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    replayPageMock.repository.load.mockResolvedValueOnce({
+      ok: false,
+      error: { code: "invalid-manifest", message: "missing package" },
+    });
+    const { ReplayPage } = await import("../ReplayPage");
+    const { MemoryRouter } = await import("react-router-dom");
+
+    const { rerender } = render(
+      <MemoryRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
+        <ReplayPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText(/加载失败：invalid-manifest/)).toBeInTheDocument());
+    replayPageMock.routeId = "recording-2";
+    rerender(
+      <MemoryRouter future={{ v7_relativeSplatPath: true, v7_startTransition: true }}>
+        <ReplayPage />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(replayPageMock.repository.load).toHaveBeenCalledWith("recording-2"));
+    await waitFor(() => expect(screen.queryByText(/加载失败/)).not.toBeInTheDocument());
+    expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData);
+    pause.mockRestore();
+  });
+
+  it("starts recorded media from the replay control gesture", async () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    if (typeof URL.createObjectURL !== "function") {
+      Object.defineProperty(URL, "createObjectURL", {
+        writable: true,
+        value: vi.fn(() => "blob:replay-media"),
+      });
+    }
+    if (typeof URL.revokeObjectURL !== "function") {
+      Object.defineProperty(URL, "revokeObjectURL", {
+        writable: true,
+        value: vi.fn(),
+      });
+    }
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:replay-media");
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const { ReplayPage } = await import("../ReplayPage");
+
+    render(<ReplayPage />);
+    await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData));
+
+    act(() => {
+      replayPageMock.onTick?.({
+        editor: {
+          code: "",
+          language: "javascript",
+          cursor: null,
+          selection: null,
+          scrollTop: 0,
+          scrollLeft: 0,
+          fontSize: 14,
+          theme: "dark",
+        },
+        pointer: null,
+        media: { microphoneEnabled: true, cameraEnabled: true, cameraPosition: { x: 0.8, y: 0.75 } },
+        runtime: { status: "idle", stdout: [], stderr: [], previewHtml: null, errorMessage: null },
+      });
+    });
+
+    await waitFor(() => expect(screen.getByLabelText("录制摄像头视频")).toBeInTheDocument());
+    act(() => {
+      replayPageMock.controlsProps?.onPlayPause();
+    });
+
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(replayPageMock.scheduler.play).toHaveBeenCalledTimes(1);
+
+    createObjectURL.mockRestore();
+    revokeObjectURL.mockRestore();
+    play.mockRestore();
+    pause.mockRestore();
+  });
+
+  it.each([1_000, 7_000])(
+    "does not start recorded media from the replay control gesture outside the active segment at %ims",
+    async (timelineTimeMs) => {
+      const originalMedia = replayPageMock.packageData.media;
+      replayPageMock.packageData.media = {
+        ...originalMedia!,
+        timelineOffsetMs: 5_000,
+        durationMs: 1_000,
+      };
+      replayPageMock.schedulerState.timelineTimeMs = timelineTimeMs;
+      const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+      const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+      if (typeof URL.createObjectURL !== "function") {
+        Object.defineProperty(URL, "createObjectURL", {
+          writable: true,
+          value: vi.fn(() => "blob:replay-media"),
+        });
+      }
+      if (typeof URL.revokeObjectURL !== "function") {
+        Object.defineProperty(URL, "revokeObjectURL", {
+          writable: true,
+          value: vi.fn(),
+        });
+      }
+      const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:offset-media");
+      const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+      const { ReplayPage } = await import("../ReplayPage");
+
+      try {
+        render(<ReplayPage />);
+        await waitFor(() => expect(screen.getByLabelText("录制摄像头视频")).toBeInTheDocument());
+
+        act(() => {
+          replayPageMock.controlsProps?.onPlayPause();
+        });
+
+        expect(play).not.toHaveBeenCalled();
+        expect(pause).toHaveBeenCalled();
+        expect(replayPageMock.scheduler.play).toHaveBeenCalledTimes(1);
+      } finally {
+        replayPageMock.packageData.media = originalMedia;
+        createObjectURL.mockRestore();
+        revokeObjectURL.mockRestore();
+        play.mockRestore();
+        pause.mockRestore();
+      }
+    },
+  );
+
+  it("starts recorded media when the video becomes ready after scheduler playback has begun", async () => {
+    replayPageMock.schedulerState.status = "playing";
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    if (typeof URL.createObjectURL !== "function") {
+      Object.defineProperty(URL, "createObjectURL", {
+        writable: true,
+        value: vi.fn(() => "blob:replay-media"),
+      });
+    }
+    if (typeof URL.revokeObjectURL !== "function") {
+      Object.defineProperty(URL, "revokeObjectURL", {
+        writable: true,
+        value: vi.fn(),
+      });
+    }
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:late-media");
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const { ReplayPage } = await import("../ReplayPage");
+
+    render(<ReplayPage />);
+
+    await waitFor(() => expect(screen.getByLabelText("录制摄像头视频")).toBeInTheDocument());
+    await waitFor(() => expect(play).toHaveBeenCalled());
+    expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData);
+
+    createObjectURL.mockRestore();
+    revokeObjectURL.mockRestore();
+    play.mockRestore();
+    pause.mockRestore();
+  });
+
+  it.each([1_000, 7_000])(
+    "pauses and hides recorded media outside the active media segment at %ims",
+    async (timelineTimeMs) => {
+      const originalMedia = replayPageMock.packageData.media;
+      replayPageMock.packageData.media = {
+        ...originalMedia!,
+        timelineOffsetMs: 5_000,
+        durationMs: 1_000,
+      };
+      replayPageMock.schedulerState.status = "playing";
+      replayPageMock.schedulerState.timelineTimeMs = timelineTimeMs;
+      const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+      const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+      if (typeof URL.createObjectURL !== "function") {
+        Object.defineProperty(URL, "createObjectURL", {
+          writable: true,
+          value: vi.fn(() => "blob:replay-media"),
+        });
+      }
+      if (typeof URL.revokeObjectURL !== "function") {
+        Object.defineProperty(URL, "revokeObjectURL", {
+          writable: true,
+          value: vi.fn(),
+        });
+      }
+      const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:offset-media");
+      const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+      const { ReplayPage } = await import("../ReplayPage");
+
+      try {
+        render(<ReplayPage />);
+        await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData));
+
+        act(() => {
+          replayPageMock.onTick?.({
+            editor: {
+              code: "",
+              language: "javascript",
+              cursor: null,
+              selection: null,
+              scrollTop: 0,
+              scrollLeft: 0,
+              fontSize: 14,
+              theme: "dark",
+            },
+            pointer: null,
+            media: { microphoneEnabled: true, cameraEnabled: true, cameraPosition: { x: 0.8, y: 0.75 } },
+            runtime: { status: "idle", stdout: [], stderr: [], previewHtml: null, errorMessage: null },
+          });
+        });
+
+        const video = screen.getByLabelText("录制摄像头视频");
+        await waitFor(() => expect(pause).toHaveBeenCalled());
+        expect(play).not.toHaveBeenCalled();
+        expect(video.parentElement).toHaveClass("sr-only");
+      } finally {
+        replayPageMock.packageData.media = originalMedia;
+        createObjectURL.mockRestore();
+        revokeObjectURL.mockRestore();
+        play.mockRestore();
+        pause.mockRestore();
+      }
+    },
+  );
 });

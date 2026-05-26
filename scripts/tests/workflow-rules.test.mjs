@@ -365,6 +365,13 @@ test('contract diff filter includes deleted files', () => {
   assert.equal(CONTRACT_DIFF_FILTER.includes('D'), true);
 });
 
+test('authority docs keep IndexedDB save failure export fallback mandatory', () => {
+  const technicalPlan = readFileSync('docs/技术方案.md', 'utf8');
+
+  assert.match(technicalPlan, /文件导出作为保存失败兜底/u);
+  assert.match(technicalPlan, /当 IndexedDB 写入失败或 quota 不足时，文件导出是 P0 兜底路径/u);
+});
+
 test('contract check launches npx through cmd on Windows', () => {
   const contractCheck = readFileSync('scripts/workflows/contract-check.mjs', 'utf8');
 
@@ -373,6 +380,16 @@ test('contract check launches npx through cmd on Windows', () => {
   assert.match(contractCheck, /'npx\.cmd'/u);
   assert.match(contractCheck, /execFileSync\(command, args/u);
   assert.doesNotMatch(contractCheck, /execFileSync\('npx'/u);
+});
+
+test('contract check reuses an existing CI base ref before fetching', () => {
+  const contractCheck = readFileSync('scripts/workflows/contract-check.mjs', 'utf8');
+
+  assert.match(contractCheck, /const baseRef = `origin\/\$\{process\.env\.GITHUB_BASE_REF\}`/u);
+  assert.match(contractCheck, /if \(!gitRefExists\(baseRef\)\)/u);
+  assert.match(contractCheck, /`\$\{baseRef\}\.\.\.HEAD`/u);
+  assert.doesNotMatch(contractCheck, /`origin\/\$\{process\.env\.GITHUB_BASE_REF\}\.\.\.HEAD`/u);
+  assert.match(contractCheck, /function gitRefExists\(ref\)/u);
 });
 
 test('evaluateGitNexusContract blocks critical changes without tests and impact summary', () => {
@@ -797,4 +814,14 @@ test('repo guard supports fork pull requests without checking out PR code', () =
   assert.doesNotMatch(workflow, /head\.repo\.full_name\s*==\s*github\.repository/);
   assert.doesNotMatch(workflow, /actions\/checkout@/);
   assert.match(workflow, /ceilf6\/repo-guard@main/);
+  assert.match(workflow, /github-token:\s*\$\{\{\s*secrets\.TRAINING_BOT_TOKEN\s*\|\|\s*secrets\.GITHUB_TOKEN\s*\}\}/);
+});
+
+test('training PR workflows use the bot token for checkout and API reads when available', () => {
+  const guardWorkflow = readFileSync('.github/workflows/pr-guard.yml', 'utf8');
+  const autoMergeWorkflow = readFileSync('.github/workflows/pr-auto-merge.yml', 'utf8');
+
+  assert.match(guardWorkflow, /token:\s*\$\{\{\s*secrets\.TRAINING_BOT_TOKEN\s*\|\|\s*github\.token\s*\}\}/);
+  assert.match(guardWorkflow, /GITHUB_TOKEN:\s*\$\{\{\s*secrets\.TRAINING_BOT_TOKEN\s*\|\|\s*secrets\.GITHUB_TOKEN\s*\}\}/);
+  assert.match(autoMergeWorkflow, /token:\s*\$\{\{\s*secrets\.TRAINING_BOT_TOKEN\s*\|\|\s*github\.token\s*\}\}/);
 });
