@@ -22,7 +22,7 @@
     "test:web": "npm run test -w apps/web",
     "lint:web": "npm run lint -w apps/web",
     "e2e:web": "npm run e2e -w apps/web",
-    "test": "node --test scripts/tests/workflow-rules.test.mjs"
+    "test": "node --test scripts/tests/*.test.mjs"
   },
   "engines": {
     "node": ">=20"

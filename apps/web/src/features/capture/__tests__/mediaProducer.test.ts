@@ -70,11 +70,13 @@ describe("createMediaProducer", () => {
   };
 
   it("should emit media-warning on start when getCapability already reports errors", () => {
-    deps.getCapability = vi.fn((): MediaCapability => ({
-      ...defaultCapability(),
-      audio: "denied",
-      camera: "busy",
-    }));
+    deps.getCapability = vi.fn(
+      (): MediaCapability => ({
+        ...defaultCapability(),
+        audio: "denied",
+        camera: "busy",
+      }),
+    );
 
     const producer = createMediaProducer(deps);
     producer.start();
@@ -85,13 +87,13 @@ describe("createMediaProducer", () => {
       expect.objectContaining({
         type: "media-warning",
         payload: { target: "audio", code: "permission-denied", message: expect.any(String) },
-      })
+      }),
     );
     expect(mockBus.emit).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "media-warning",
         payload: { target: "camera", code: "busy", message: expect.any(String) },
-      })
+      }),
     );
   });
 
@@ -105,7 +107,7 @@ describe("createMediaProducer", () => {
       expect.objectContaining({
         type: "media-warning",
         payload: { target: "audio", code: "permission-denied", message: expect.any(String) },
-      })
+      }),
     );
 
     // Trigger camera not-found
@@ -115,7 +117,16 @@ describe("createMediaProducer", () => {
       expect.objectContaining({
         type: "media-warning",
         payload: { target: "camera", code: "not-found", message: expect.any(String) },
-      })
+      }),
+    );
+
+    mockBus.emit.mockClear();
+    triggerCapability({ camera: "unsupported" });
+    expect(mockBus.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "media-warning",
+        payload: { target: "camera", code: "unsupported", message: expect.any(String) },
+      }),
     );
   });
 
@@ -126,15 +137,13 @@ describe("createMediaProducer", () => {
 
     // Warnings SHOULD be emitted during pause
     triggerCapability({ audio: "denied" });
-    expect(mockBus.emit).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "media-warning" })
-    );
+    expect(mockBus.emit).toHaveBeenCalledWith(expect.objectContaining({ type: "media-warning" }));
     mockBus.emit.mockClear();
 
     // Inputs SHOULD be ignored during pause
     producer.setMicrophoneEnabled(false);
     producer.reportCameraPosition({ x: 0.5, y: 0.5 });
-    
+
     expect(mockBus.emit).not.toHaveBeenCalled();
 
     producer.resume();
@@ -159,7 +168,7 @@ describe("createMediaProducer", () => {
       expect.objectContaining({
         type: "media-toggle",
         payload: { microphoneEnabled: true, cameraEnabled: true }, // camera default is true
-      })
+      }),
     );
 
     producer.setCameraEnabled(false);
@@ -168,7 +177,7 @@ describe("createMediaProducer", () => {
       expect.objectContaining({
         type: "media-toggle",
         payload: { microphoneEnabled: true, cameraEnabled: false },
-      })
+      }),
     );
   });
 
@@ -176,14 +185,14 @@ describe("createMediaProducer", () => {
     const producer = createMediaProducer(deps);
     producer.start();
 
-    // Out of bounds 闁炽儻鎷� flushes immediately at clock.now() === 0
+    // Out of bounds position flushes immediately at clock.now() === 0
     producer.reportCameraPosition({ x: -1, y: 2 });
 
     expect(mockBus.emit).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "camera-position",
         payload: { x: 0, y: 1 },
-      })
+      }),
     );
     mockBus.emit.mockClear();
 
@@ -200,18 +209,44 @@ describe("createMediaProducer", () => {
       expect.objectContaining({
         type: "camera-position",
         payload: { x: 0.7, y: 0.7 },
-      })
+      }),
+    );
+  });
+
+  it("should emit the first camera-position immediately after stop and restart", () => {
+    const producer = createMediaProducer(deps);
+    producer.start();
+
+    producer.reportCameraPosition({ x: 0.1, y: 0.1 });
+    expect(mockBus.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "camera-position",
+        payload: { x: 0.1, y: 0.1 },
+      }),
+    );
+
+    mockBus.emit.mockClear();
+    producer.stop();
+    producer.start();
+    producer.reportCameraPosition({ x: 0.2, y: 0.2 });
+
+    expect(mockBus.emit).toHaveBeenCalledTimes(1);
+    expect(mockBus.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "camera-position",
+        payload: { x: 0.2, y: 0.2 },
+      }),
     );
   });
 
   it("should clear subscriptions and release devices on dispose", () => {
     const producer = createMediaProducer(deps);
     producer.start();
-    
+
     expect(listeners.length).toBe(1);
-    
+
     producer.dispose();
-    
+
     expect(listeners.length).toBe(0);
     expect(mockDevices.release).toHaveBeenCalled();
   });
@@ -221,7 +256,7 @@ describe("createMediaProducer", () => {
     producer.start();
     producer.start();
     producer.start();
-    
+
     expect(mockDevices.subscribe).toHaveBeenCalledTimes(1);
     expect(listeners.length).toBe(1);
 
@@ -237,10 +272,12 @@ describe("createMediaProducer", () => {
   });
 
   it("should re-emit media-warning after stop and restart when capability is still failing", () => {
-    deps.getCapability = vi.fn((): MediaCapability => ({
-      ...defaultCapability(),
-      audio: "denied",
-    }));
+    deps.getCapability = vi.fn(
+      (): MediaCapability => ({
+        ...defaultCapability(),
+        audio: "denied",
+      }),
+    );
 
     const producer = createMediaProducer(deps);
     producer.start();
@@ -255,7 +292,7 @@ describe("createMediaProducer", () => {
       expect.objectContaining({
         type: "media-warning",
         payload: { target: "audio", code: "permission-denied", message: expect.any(String) },
-      })
+      }),
     );
   });
 
@@ -266,7 +303,7 @@ describe("createMediaProducer", () => {
     // Trigger audio denied
     triggerCapability({ audio: "denied" });
     expect(mockBus.emit).toHaveBeenCalledTimes(1);
-    
+
     // Trigger audio denied again (should not emit)
     triggerCapability({ audio: "denied" });
     expect(mockBus.emit).toHaveBeenCalledTimes(1);
@@ -297,7 +334,7 @@ describe("createMediaProducer", () => {
     producer.start();
 
     const { dispose } = producer;
-    
+
     expect(() => dispose()).not.toThrow();
     expect(listeners.length).toBe(0);
     expect(mockDevices.release).toHaveBeenCalled();
@@ -312,12 +349,12 @@ describe("createMediaProducer", () => {
     producer.reportCameraPosition({ x: 0.2, y: 0.2 }); // This one will be queued by the timer
 
     producer.stop(); // Wait, let's test dispose or stop cancels the timer
-    
+
     vi.advanceTimersByTime(50);
-    
+
     expect(mockBus.emit).toHaveBeenCalledTimes(1); // Only the first one which flushed immediately
     expect(mockBus.emit).toHaveBeenCalledWith(
-      expect.objectContaining({ payload: { x: 0.1, y: 0.1 } })
+      expect.objectContaining({ payload: { x: 0.1, y: 0.1 } }),
     );
 
     mockBus.emit.mockClear();
@@ -332,10 +369,10 @@ describe("createMediaProducer", () => {
     dispose();
 
     vi.advanceTimersByTime(50);
-    
+
     expect(mockBus.emit).toHaveBeenCalledTimes(1); // Only the 0.3, 0.3
     expect(mockBus.emit).not.toHaveBeenCalledWith(
-      expect.objectContaining({ payload: { x: 0.4, y: 0.4 } })
+      expect.objectContaining({ payload: { x: 0.4, y: 0.4 } }),
     );
   });
 });
