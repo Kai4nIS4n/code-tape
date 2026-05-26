@@ -25,6 +25,10 @@ function commentCreatedAt(comment) {
   return comment?.created_at || comment?.createdAt;
 }
 
+function hasCrPassFrom(items, login) {
+  return items.some((item) => commentLogin(item) === login && item?.body?.trim() === 'CR通过');
+}
+
 function isEligibleReviewerComment(comment, prAuthor) {
   const login = commentLogin(comment);
   const type = comment?.user?.type;
@@ -39,23 +43,18 @@ export function findClaimedReviewer({ comments = [], prAuthor }) {
   return commentLogin(claimedComment) ?? null;
 }
 
-export function findValidReviewer({ comments = [], prAuthor, latestCommitAt }) {
-  const latestCommitTime = Date.parse(latestCommitAt || '1970-01-01T00:00:00.000Z');
+export function findValidReviewer({ comments = [], reviews = [], reviewComments = [], prAuthor }) {
   const claimedReviewer = findClaimedReviewer({ comments, prAuthor });
   if (!claimedReviewer) {
     return null;
   }
 
-  const hasFreshPass = comments.some((comment) => {
-    const createdAt = commentCreatedAt(comment);
-    return (
-      commentLogin(comment) === claimedReviewer &&
-      comment?.body?.trim() === 'CR通过' &&
-      Date.parse(createdAt) >= latestCommitTime
-    );
-  });
+  const hasPass =
+    hasCrPassFrom(comments, claimedReviewer) ||
+    hasCrPassFrom(reviews, claimedReviewer) ||
+    hasCrPassFrom(reviewComments, claimedReviewer);
 
-  return hasFreshPass ? claimedReviewer : null;
+  return hasPass ? claimedReviewer : null;
 }
 
 export function isTimedOut(createdAt, now, hours = 24) {
