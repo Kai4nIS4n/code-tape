@@ -13,25 +13,23 @@ export const createShortcutProducer: CreateShortcutProducer = (deps) => {
   let active = false;
   let disposed = false;
   let stopped = false;
-  let root: Window | HTMLElement | null = null;
+  let listening = false;
   const lastEmittedAtBySignature = new Map<string, number>();
   const keydownListener: EventListener = (event) => {
     if (event instanceof KeyboardEvent) handleKeyDown(event);
   };
 
   const detach = () => {
-    if (!root) return;
-    root.removeEventListener("keydown", keydownListener);
-    root = null;
+    if (!listening) return;
+    window.removeEventListener("keydown", keydownListener, true);
+    listening = false;
   };
 
-  const attachCurrentRoot = () => {
+  const attach = () => {
     if (!active || disposed) return;
-    const nextRoot = deps.getRoot();
-    if (nextRoot === root) return;
-    detach();
-    root = nextRoot;
-    root?.addEventListener("keydown", keydownListener);
+    if (listening) return;
+    window.addEventListener("keydown", keydownListener, true);
+    listening = true;
   };
 
   const resolveShortcut = (event: KeyboardEvent): ResolvedShortcut | null => {
@@ -49,31 +47,40 @@ export const createShortcutProducer: CreateShortcutProducer = (deps) => {
   };
 
   function handleKeyDown(event: KeyboardEvent) {
-    attachCurrentRoot();
     if (!active || disposed) return;
+    if (!isInsideCurrentRoot(event)) return;
     const shortcut = resolveShortcut(event);
     if (!shortcut) return;
     const now = event.timeStamp ?? Date.now();
     const lastEmittedAt = lastEmittedAtBySignature.get(shortcut.signature);
     if (lastEmittedAt !== undefined && now - lastEmittedAt < SHORTCUT_DEDUPE_MS) return;
     lastEmittedAtBySignature.set(shortcut.signature, now);
+    const payload = {
+      keys: shortcut.keys,
+      label: shortcut.label,
+      ...(shortcut.command ? { command: shortcut.command } : {}),
+    };
     deps.bus.emit({
       type: "shortcut",
       source: "shortcut",
       track: "ui",
-      payload: {
-        keys: shortcut.keys,
-        label: shortcut.label,
-        command: shortcut.command,
-      },
+      payload,
     });
+  }
+
+  function isInsideCurrentRoot(event: KeyboardEvent): boolean {
+    const currentRoot = deps.getRoot();
+    if (!currentRoot) return false;
+    if (currentRoot === window) return true;
+    if (!(currentRoot instanceof HTMLElement)) return false;
+    return event.target instanceof Node && currentRoot.contains(event.target);
   }
 
   return {
     start() {
       if (stopped || disposed) return;
       active = true;
-      attachCurrentRoot();
+      attach();
     },
     pause() {
       active = false;
@@ -82,7 +89,7 @@ export const createShortcutProducer: CreateShortcutProducer = (deps) => {
     resume() {
       if (stopped || disposed) return;
       active = true;
-      attachCurrentRoot();
+      attach();
     },
     stop() {
       stopped = true;

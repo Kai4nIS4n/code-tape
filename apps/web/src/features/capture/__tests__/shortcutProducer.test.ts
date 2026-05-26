@@ -69,6 +69,7 @@ describe("createShortcutProducer", () => {
 
   it("uses custom labels and falls back to a readable key label", () => {
     const root = document.createElement("div");
+    document.body.append(root);
     const clock = createRecordingClock({ nowProvider: () => 1000 });
     const bus = createEventBus({ clock, wallTimeProvider: () => "T" });
     clock.start();
@@ -86,16 +87,19 @@ describe("createShortcutProducer", () => {
     keydown(root, { key: "k", metaKey: true });
     keydown(root, { key: "p", ctrlKey: true, altKey: true, timeStamp: 600 });
 
-    expect(bus.drain().map((event) => event.payload)).toEqual([
+    const payloads = bus.drain().map((event) => event.payload);
+    expect(payloads).toEqual([
       { keys: ["Cmd", "K"], label: "Command Palette", command: "command-palette" },
-      { keys: ["Ctrl", "Alt", "P"], label: "Ctrl + Alt + P", command: undefined },
+      { keys: ["Ctrl", "Alt", "P"], label: "Ctrl + Alt + P" },
     ]);
+    expect(payloads[1]).not.toHaveProperty("command");
   });
 
   it("handles root changes across pause and resume", () => {
     const { bus, clock } = setup();
     const first = document.createElement("div");
     const second = document.createElement("div");
+    document.body.append(first, second);
     let root: Window | HTMLElement | null = first;
     const producer = createShortcutProducer({ bus, clock, getRoot: () => root });
     producer.start();
@@ -107,6 +111,43 @@ describe("createShortcutProducer", () => {
     producer.resume();
     keydown(first, { key: "z", ctrlKey: true, timeStamp: 1200 });
     keydown(second, { key: "Enter", ctrlKey: true, timeStamp: 1800 });
+
+    expect(bus.drain().map((event) => event.payload)).toEqual([
+      { keys: ["Ctrl", "S"], label: "Save", command: "save" },
+      { keys: ["Ctrl", "Enter"], label: "Run", command: "run" },
+    ]);
+  });
+
+  it("collects shortcuts when root appears after start", () => {
+    const { bus, clock } = setup();
+    const rootElement = document.createElement("div");
+    document.body.append(rootElement);
+    let root: Window | HTMLElement | null = null;
+    const producer = createShortcutProducer({ bus, clock, getRoot: () => root });
+    producer.start();
+
+    keydown(window, { key: "s", ctrlKey: true });
+    root = rootElement;
+    keydown(rootElement, { key: "s", ctrlKey: true, timeStamp: 600 });
+
+    expect(bus.drain().map((event) => event.payload)).toEqual([
+      { keys: ["Ctrl", "S"], label: "Save", command: "save" },
+    ]);
+  });
+
+  it("collects shortcuts after active root changes without resume", () => {
+    const { bus, clock } = setup();
+    const first = document.createElement("div");
+    const second = document.createElement("div");
+    document.body.append(first, second);
+    let root: Window | HTMLElement | null = first;
+    const producer = createShortcutProducer({ bus, clock, getRoot: () => root });
+    producer.start();
+
+    keydown(first, { key: "s", ctrlKey: true });
+    root = second;
+    keydown(second, { key: "Enter", ctrlKey: true, timeStamp: 600 });
+    keydown(first, { key: "z", ctrlKey: true, timeStamp: 1200 });
 
     expect(bus.drain().map((event) => event.payload)).toEqual([
       { keys: ["Ctrl", "S"], label: "Save", command: "save" },
