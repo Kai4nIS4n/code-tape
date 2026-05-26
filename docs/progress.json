@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-05-26T14:37:58Z",
+  "updatedAt": "2026-05-26T14:38:33Z",
   "students": {
     "ceilf6": {
       "activeIssue": 76,
@@ -65,7 +65,7 @@
       "totalScore": 6.25
     },
     "yangchloeeeee": {
-      "activeIssue": null,
+      "activeIssue": 77,
       "completedIssues": [
         4,
         7,
@@ -353,6 +353,20 @@
       "status": "claimed",
       "assignee": "ceilf6",
       "claimedAt": "2026-05-26T14:35:21Z",
+      "closedAt": null,
+      "mergedPr": null
+    },
+    "77": {
+      "number": 77,
+      "title": "[P0] 录制保存 quota 预检与 ZIP 兜底提示",
+      "score": 3,
+      "stack": [
+        "react",
+        "typescript"
+      ],
+      "status": "claimed",
+      "assignee": "yangchloeeeee",
+      "claimedAt": "2026-05-26T14:38:33Z",
       "closedAt": null,
       "mergedPr": null
     },
