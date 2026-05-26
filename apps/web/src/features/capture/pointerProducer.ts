@@ -1,6 +1,7 @@
 import type { CreatePointerProducer } from "./types";
 
 const POINTER_MOVE_THROTTLE_MS = 30;
+const TARGET_REFRESH_MS = 16;
 
 export const createPointerProducer: CreatePointerProducer = (deps) => {
   let active = false;
@@ -8,6 +9,18 @@ export const createPointerProducer: CreatePointerProducer = (deps) => {
   let host: HTMLElement | null = null;
   let documentTarget: Document | null = null;
   let lastMoveEmittedAt = -Infinity;
+  let refreshTimer: number | null = null;
+
+  const stopRefreshTimer = () => {
+    if (refreshTimer === null) return;
+    window.clearInterval(refreshTimer);
+    refreshTimer = null;
+  };
+
+  const startRefreshTimer = () => {
+    if (refreshTimer !== null) return;
+    refreshTimer = window.setInterval(attachCurrentHost, TARGET_REFRESH_MS);
+  };
 
   const detach = () => {
     if (documentTarget) {
@@ -21,7 +34,7 @@ export const createPointerProducer: CreatePointerProducer = (deps) => {
   const attachCurrentHost = () => {
     if (!active || disposed) return;
     const nextHost = deps.getHost();
-    const nextDocument = nextHost?.ownerDocument ?? document;
+    const nextDocument = nextHost?.ownerDocument ?? null;
     if (nextDocument !== documentTarget) {
       if (documentTarget) {
         documentTarget.removeEventListener("pointermove", handlePointerMove, true);
@@ -32,6 +45,7 @@ export const createPointerProducer: CreatePointerProducer = (deps) => {
       documentTarget?.addEventListener("pointerdown", handlePointerDown, true);
     }
     if (nextHost === host) return;
+    lastMoveEmittedAt = -Infinity;
     host = nextHost;
   };
 
@@ -53,7 +67,7 @@ export const createPointerProducer: CreatePointerProducer = (deps) => {
   const isInsideHost = (event: Event): boolean => {
     const currentHost = host;
     const target = event.target;
-    return Boolean(currentHost && target instanceof Node && currentHost.contains(target));
+    return Boolean(currentHost && isNodeTarget(target) && currentHost.contains(target));
   };
 
   function handlePointerMove(event: PointerEvent) {
@@ -93,23 +107,29 @@ export const createPointerProducer: CreatePointerProducer = (deps) => {
       active = true;
       lastMoveEmittedAt = -Infinity;
       attachCurrentHost();
+      startRefreshTimer();
     },
     pause() {
       active = false;
+      stopRefreshTimer();
       detach();
     },
     resume() {
       if (disposed) return;
       active = true;
+      lastMoveEmittedAt = -Infinity;
       attachCurrentHost();
+      startRefreshTimer();
     },
     stop() {
       active = false;
+      stopRefreshTimer();
       detach();
     },
     dispose() {
       disposed = true;
       active = false;
+      stopRefreshTimer();
       detach();
     },
   };
@@ -121,4 +141,8 @@ function clamp(value: number, min: number, max: number): number {
 
 function isRecordedButton(button: number): button is 0 | 1 | 2 {
   return button === 0 || button === 1 || button === 2;
+}
+
+function isNodeTarget(target: EventTarget | null): target is Node {
+  return Boolean(target && typeof (target as Node).nodeType === "number");
 }

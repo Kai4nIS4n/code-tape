@@ -1,6 +1,7 @@
 import type { CreateShortcutProducer } from "./types";
 
 const SHORTCUT_DEDUPE_MS = 500;
+const TARGET_REFRESH_MS = 16;
 
 type ResolvedShortcut = {
   signature: string;
@@ -12,23 +13,38 @@ type ResolvedShortcut = {
 export const createShortcutProducer: CreateShortcutProducer = (deps) => {
   let active = false;
   let disposed = false;
-  let listening = false;
+  let listeningTarget: Window | null = null;
+  let refreshTimer: number | null = null;
   const lastEmittedAtBySignature = new Map<string, number>();
   const keydownListener: EventListener = (event) => {
-    if (event instanceof KeyboardEvent) handleKeyDown(event);
+    if (isKeyboardEvent(event)) handleKeyDown(event);
+  };
+
+  const stopRefreshTimer = () => {
+    if (refreshTimer === null) return;
+    window.clearInterval(refreshTimer);
+    refreshTimer = null;
+  };
+
+  const startRefreshTimer = () => {
+    if (refreshTimer !== null) return;
+    refreshTimer = window.setInterval(attach, TARGET_REFRESH_MS);
   };
 
   const detach = () => {
-    if (!listening) return;
-    window.removeEventListener("keydown", keydownListener, true);
-    listening = false;
+    if (!listeningTarget) return;
+    listeningTarget.removeEventListener("keydown", keydownListener, true);
+    listeningTarget = null;
   };
 
   const attach = () => {
     if (!active || disposed) return;
-    if (listening) return;
-    window.addEventListener("keydown", keydownListener, true);
-    listening = true;
+    const nextTarget = listenerTargetForRoot(deps.getRoot());
+    if (nextTarget === listeningTarget) return;
+    detach();
+    if (!nextTarget) return;
+    nextTarget.addEventListener("keydown", keydownListener, true);
+    listeningTarget = nextTarget;
   };
 
   const resolveShortcut = (event: KeyboardEvent): ResolvedShortcut | null => {
@@ -46,8 +62,10 @@ export const createShortcutProducer: CreateShortcutProducer = (deps) => {
   };
 
   function handleKeyDown(event: KeyboardEvent) {
+    const eventSourceTarget = listeningTarget;
+    attach();
     if (!active || disposed) return;
-    if (!isInsideCurrentRoot(event)) return;
+    if (!isInsideCurrentRoot(event, eventSourceTarget)) return;
     const shortcut = resolveShortcut(event);
     if (!shortcut) return;
     const now = event.timeStamp ?? Date.now();
@@ -67,12 +85,13 @@ export const createShortcutProducer: CreateShortcutProducer = (deps) => {
     });
   }
 
-  function isInsideCurrentRoot(event: KeyboardEvent): boolean {
+  function isInsideCurrentRoot(event: KeyboardEvent, eventSourceTarget: Window | null): boolean {
     const currentRoot = deps.getRoot();
     if (!currentRoot) return false;
-    if (currentRoot === window) return true;
-    if (!(currentRoot instanceof HTMLElement)) return false;
-    return event.target instanceof Node && currentRoot.contains(event.target);
+    if (isWindowRoot(currentRoot)) {
+      return eventSourceTarget === currentRoot;
+    }
+    return isNodeTarget(event.target) && currentRoot.contains(event.target);
   }
 
   return {
@@ -80,24 +99,30 @@ export const createShortcutProducer: CreateShortcutProducer = (deps) => {
       if (disposed) return;
       active = true;
       attach();
+      startRefreshTimer();
     },
     pause() {
       active = false;
+      stopRefreshTimer();
       detach();
+      lastEmittedAtBySignature.clear();
     },
     resume() {
       if (disposed) return;
       active = true;
       attach();
+      startRefreshTimer();
     },
     stop() {
       active = false;
+      stopRefreshTimer();
       detach();
       lastEmittedAtBySignature.clear();
     },
     dispose() {
       disposed = true;
       active = false;
+      stopRefreshTimer();
       detach();
       lastEmittedAtBySignature.clear();
     },
@@ -155,4 +180,22 @@ function normalizeKey(rawKey: string): string {
 
 function isApplePlatform(): boolean {
   return typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+}
+
+function listenerTargetForRoot(root: Window | HTMLElement | null): Window | null {
+  if (!root) return null;
+  if (isWindowRoot(root)) return root;
+  return root.ownerDocument?.defaultView ?? null;
+}
+
+function isWindowRoot(root: Window | HTMLElement): root is Window {
+  return !("ownerDocument" in root);
+}
+
+function isKeyboardEvent(event: Event): event is KeyboardEvent {
+  return event.type === "keydown" && typeof (event as KeyboardEvent).key === "string";
+}
+
+function isNodeTarget(target: EventTarget | null): target is Node {
+  return Boolean(target && typeof (target as Node).nodeType === "number");
 }

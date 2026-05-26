@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEventBus } from "@/features/recorder/eventBus";
 import { createRecordingClock } from "@/features/recorder/recordingClock";
 import { createPointerProducer } from "../pointerProducer";
@@ -8,6 +8,18 @@ function setup() {
   const bus = createEventBus({ clock, wallTimeProvider: () => "T" });
   clock.start();
   return { bus, clock };
+}
+
+const producers: Array<{ dispose(): void }> = [];
+
+afterEach(() => {
+  for (const producer of producers.splice(0)) producer.dispose();
+  vi.useRealTimers();
+});
+
+function trackProducer<T extends { dispose(): void }>(producer: T): T {
+  producers.push(producer);
+  return producer;
 }
 
 function hostRect(host: HTMLElement, rect: Partial<DOMRect>) {
@@ -36,13 +48,21 @@ function pointer(type: string, init: PointerEventInit & { timeStamp?: number }) 
   return event;
 }
 
+function appendFrameDocument(): Document {
+  const frame = document.createElement("iframe");
+  document.body.append(frame);
+  const frameDocument = frame.contentDocument;
+  if (!frameDocument) throw new Error("Expected iframe document");
+  return frameDocument;
+}
+
 describe("createPointerProducer", () => {
   it("emits throttled mouse-move payloads relative to the current host", () => {
     const { bus, clock } = setup();
     const host = document.createElement("div");
     document.body.append(host);
     hostRect(host, { left: 10, top: 20, width: 300, height: 200 });
-    const producer = createPointerProducer({ bus, clock, getHost: () => host });
+    const producer = trackProducer(createPointerProducer({ bus, clock, getHost: () => host }));
     producer.start();
 
     host.dispatchEvent(pointer("pointermove", { clientX: 40, clientY: 70, timeStamp: 1 }));
@@ -66,7 +86,7 @@ describe("createPointerProducer", () => {
     const host = document.createElement("div");
     document.body.append(host);
     hostRect(host, { left: 5, top: 10, width: 100, height: 80 });
-    const producer = createPointerProducer({ bus, clock, getHost: () => host });
+    const producer = trackProducer(createPointerProducer({ bus, clock, getHost: () => host }));
     producer.start();
 
     host.dispatchEvent(pointer("pointerdown", { button: 0, clientX: 6, clientY: 11 }));
@@ -91,20 +111,115 @@ describe("createPointerProducer", () => {
   });
 
   it("handles null and changing hosts safely", () => {
+    vi.useFakeTimers();
+    try {
+      const { bus, clock } = setup();
+      const first = document.createElement("div");
+      const second = document.createElement("div");
+      document.body.append(first, second);
+      hostRect(first, { left: 0, top: 0, width: 100, height: 100 });
+      hostRect(second, { left: 100, top: 200, width: 50, height: 60 });
+      let host: HTMLElement | null = null;
+      const producer = trackProducer(createPointerProducer({ bus, clock, getHost: () => host }));
+
+      producer.start();
+      host = first;
+      vi.advanceTimersByTime(20);
+      first.dispatchEvent(pointer("pointermove", { clientX: 10, clientY: 20 }));
+      host = second;
+      vi.advanceTimersByTime(20);
+      second.dispatchEvent(pointer("pointerdown", { button: 0, clientX: 120, clientY: 230 }));
+
+      expect(bus.drain().map((event) => ({ type: event.type, payload: event.payload }))).toEqual([
+        {
+          type: "mouse-move",
+          payload: { x: 10, y: 20, containerWidth: 100, containerHeight: 100 },
+        },
+        {
+          type: "mouse-click",
+          payload: { x: 20, y: 30, containerWidth: 50, containerHeight: 60, button: 0 },
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reattaches when the active host moves to another document", () => {
+    vi.useFakeTimers();
+    try {
+      const { bus, clock } = setup();
+      const first = document.createElement("div");
+      const frameDocument = appendFrameDocument();
+      const second = frameDocument.createElement("div");
+      document.body.append(first);
+      frameDocument.body.append(second);
+      hostRect(first, { left: 0, top: 0, width: 100, height: 100 });
+      hostRect(second, { left: 100, top: 200, width: 50, height: 60 });
+      let host: HTMLElement | null = first;
+      const producer = trackProducer(createPointerProducer({ bus, clock, getHost: () => host }));
+      producer.start();
+
+      first.dispatchEvent(pointer("pointermove", { clientX: 10, clientY: 20, timeStamp: 1 }));
+      host = second;
+      vi.advanceTimersByTime(20);
+      second.dispatchEvent(pointer("pointerdown", { button: 0, clientX: 120, clientY: 230 }));
+
+      expect(bus.drain().map((event) => ({ type: event.type, payload: event.payload }))).toEqual([
+        {
+          type: "mouse-move",
+          payload: { x: 10, y: 20, containerWidth: 100, containerHeight: 100 },
+        },
+        {
+          type: "mouse-click",
+          payload: { x: 20, y: 30, containerWidth: 50, containerHeight: 60, button: 0 },
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("emits the first move after resume without reusing paused throttle state", () => {
+    const { bus, clock } = setup();
+    const host = document.createElement("div");
+    document.body.append(host);
+    hostRect(host, { left: 0, top: 0, width: 100, height: 100 });
+    const producer = trackProducer(createPointerProducer({ bus, clock, getHost: () => host }));
+    producer.start();
+
+    host.dispatchEvent(pointer("pointermove", { clientX: 10, clientY: 10, timeStamp: 100 }));
+    producer.pause();
+    host.dispatchEvent(pointer("pointermove", { clientX: 20, clientY: 20, timeStamp: 110 }));
+    producer.resume();
+    host.dispatchEvent(pointer("pointermove", { clientX: 30, clientY: 30, timeStamp: 120 }));
+
+    expect(bus.drain().map((event) => ({ type: event.type, payload: event.payload }))).toEqual([
+      {
+        type: "mouse-move",
+        payload: { x: 10, y: 10, containerWidth: 100, containerHeight: 100 },
+      },
+      {
+        type: "mouse-move",
+        payload: { x: 30, y: 30, containerWidth: 100, containerHeight: 100 },
+      },
+    ]);
+  });
+
+  it("emits the first move after host changes without reusing old host throttle state", () => {
     const { bus, clock } = setup();
     const first = document.createElement("div");
     const second = document.createElement("div");
     document.body.append(first, second);
     hostRect(first, { left: 0, top: 0, width: 100, height: 100 });
     hostRect(second, { left: 100, top: 200, width: 50, height: 60 });
-    let host: HTMLElement | null = null;
-    const producer = createPointerProducer({ bus, clock, getHost: () => host });
-
+    let host: HTMLElement | null = first;
+    const producer = trackProducer(createPointerProducer({ bus, clock, getHost: () => host }));
     producer.start();
-    host = first;
-    first.dispatchEvent(pointer("pointermove", { clientX: 10, clientY: 20 }));
+
+    first.dispatchEvent(pointer("pointermove", { clientX: 10, clientY: 20, timeStamp: 100 }));
     host = second;
-    second.dispatchEvent(pointer("pointerdown", { button: 0, clientX: 120, clientY: 230 }));
+    second.dispatchEvent(pointer("pointermove", { clientX: 120, clientY: 230, timeStamp: 110 }));
 
     expect(bus.drain().map((event) => ({ type: event.type, payload: event.payload }))).toEqual([
       {
@@ -112,8 +227,8 @@ describe("createPointerProducer", () => {
         payload: { x: 10, y: 20, containerWidth: 100, containerHeight: 100 },
       },
       {
-        type: "mouse-click",
-        payload: { x: 20, y: 30, containerWidth: 50, containerHeight: 60, button: 0 },
+        type: "mouse-move",
+        payload: { x: 20, y: 30, containerWidth: 50, containerHeight: 60 },
       },
     ]);
   });
@@ -123,7 +238,7 @@ describe("createPointerProducer", () => {
     const host = document.createElement("div");
     document.body.append(host);
     hostRect(host, { left: 0, top: 0, width: 100, height: 100 });
-    const producer = createPointerProducer({ bus, clock, getHost: () => host });
+    const producer = trackProducer(createPointerProducer({ bus, clock, getHost: () => host }));
     producer.start();
     producer.pause();
     host.dispatchEvent(pointer("pointerdown", { button: 0, clientX: 10, clientY: 10 }));

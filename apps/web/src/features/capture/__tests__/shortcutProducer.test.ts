@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEventBus } from "@/features/recorder/eventBus";
 import { createRecordingClock } from "@/features/recorder/recordingClock";
 import { createShortcutProducer } from "../shortcutProducer";
@@ -7,11 +7,25 @@ function setup(root: Window | HTMLElement = window) {
   const clock = createRecordingClock({ nowProvider: () => 1000 });
   const bus = createEventBus({ clock, wallTimeProvider: () => "T" });
   clock.start();
-  return { bus, clock, producer: createShortcutProducer({ bus, clock, getRoot: () => root }) };
+  return { bus, clock, producer: trackProducer(createShortcutProducer({ bus, clock, getRoot: () => root })) };
+}
+
+const producers: Array<{ dispose(): void }> = [];
+
+afterEach(() => {
+  for (const producer of producers.splice(0)) producer.dispose();
+  vi.useRealTimers();
+});
+
+function trackProducer<T extends { dispose(): void }>(producer: T): T {
+  producers.push(producer);
+  return producer;
 }
 
 function keydown(target: Window | HTMLElement, init: KeyboardEventInit & { timeStamp?: number }) {
-  const event = new KeyboardEvent("keydown", {
+  const eventWindow = (isWindowTarget(target) ? target : (target.ownerDocument.defaultView ?? window)) as Window &
+    typeof globalThis;
+  const event = new eventWindow.KeyboardEvent("keydown", {
     bubbles: true,
     cancelable: true,
     ...init,
@@ -20,6 +34,19 @@ function keydown(target: Window | HTMLElement, init: KeyboardEventInit & { timeS
     Object.defineProperty(event, "timeStamp", { value: init.timeStamp });
   }
   target.dispatchEvent(event);
+}
+
+function isWindowTarget(target: Window | HTMLElement): target is Window {
+  return "window" in target && target.window === target;
+}
+
+function appendFrameRoot(): { frameDocument: Document; frameWindow: Window } {
+  const frame = document.createElement("iframe");
+  document.body.append(frame);
+  const frameDocument = frame.contentDocument;
+  const frameWindow = frame.contentWindow;
+  if (!frameDocument || !frameWindow) throw new Error("Expected iframe window and document");
+  return { frameDocument, frameWindow };
 }
 
 describe("createShortcutProducer", () => {
@@ -73,7 +100,7 @@ describe("createShortcutProducer", () => {
     const clock = createRecordingClock({ nowProvider: () => 1000 });
     const bus = createEventBus({ clock, wallTimeProvider: () => "T" });
     clock.start();
-    const producer = createShortcutProducer({
+    const producer = trackProducer(createShortcutProducer({
       bus,
       clock,
       getRoot: () => root,
@@ -81,7 +108,7 @@ describe("createShortcutProducer", () => {
         if (event.key === "k") return { label: "Command Palette", command: "command-palette" };
         return null;
       },
-    });
+    }));
     producer.start();
 
     keydown(root, { key: "k", metaKey: true });
@@ -101,7 +128,7 @@ describe("createShortcutProducer", () => {
     const second = document.createElement("div");
     document.body.append(first, second);
     let root: Window | HTMLElement | null = first;
-    const producer = createShortcutProducer({ bus, clock, getRoot: () => root });
+    const producer = trackProducer(createShortcutProducer({ bus, clock, getRoot: () => root }));
     producer.start();
 
     keydown(first, { key: "s", ctrlKey: true });
@@ -118,21 +145,43 @@ describe("createShortcutProducer", () => {
     ]);
   });
 
-  it("collects shortcuts when root appears after start", () => {
-    const { bus, clock } = setup();
-    const rootElement = document.createElement("div");
-    document.body.append(rootElement);
-    let root: Window | HTMLElement | null = null;
-    const producer = createShortcutProducer({ bus, clock, getRoot: () => root });
+  it("emits the same shortcut after resume without reusing paused dedupe state", () => {
+    const { bus, producer } = setup();
     producer.start();
 
-    keydown(window, { key: "s", ctrlKey: true });
-    root = rootElement;
-    keydown(rootElement, { key: "s", ctrlKey: true, timeStamp: 600 });
+    keydown(window, { key: "s", ctrlKey: true, timeStamp: 1000 });
+    producer.pause();
+    keydown(window, { key: "s", ctrlKey: true, timeStamp: 1100 });
+    producer.resume();
+    keydown(window, { key: "s", ctrlKey: true, timeStamp: 1200 });
 
     expect(bus.drain().map((event) => event.payload)).toEqual([
       { keys: ["Ctrl", "S"], label: "Save", command: "save" },
+      { keys: ["Ctrl", "S"], label: "Save", command: "save" },
     ]);
+  });
+
+  it("collects shortcuts when root appears after start", () => {
+    vi.useFakeTimers();
+    try {
+      const { bus, clock } = setup();
+      const rootElement = document.createElement("div");
+      document.body.append(rootElement);
+      let root: Window | HTMLElement | null = null;
+      const producer = trackProducer(createShortcutProducer({ bus, clock, getRoot: () => root }));
+      producer.start();
+
+      keydown(window, { key: "s", ctrlKey: true });
+      root = rootElement;
+      vi.advanceTimersByTime(20);
+      keydown(rootElement, { key: "s", ctrlKey: true, timeStamp: 600 });
+
+      expect(bus.drain().map((event) => event.payload)).toEqual([
+        { keys: ["Ctrl", "S"], label: "Save", command: "save" },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("collects shortcuts after active root changes without resume", () => {
@@ -141,7 +190,7 @@ describe("createShortcutProducer", () => {
     const second = document.createElement("div");
     document.body.append(first, second);
     let root: Window | HTMLElement | null = first;
-    const producer = createShortcutProducer({ bus, clock, getRoot: () => root });
+    const producer = trackProducer(createShortcutProducer({ bus, clock, getRoot: () => root }));
     producer.start();
 
     keydown(first, { key: "s", ctrlKey: true });
@@ -153,6 +202,47 @@ describe("createShortcutProducer", () => {
       { keys: ["Ctrl", "S"], label: "Save", command: "save" },
       { keys: ["Ctrl", "Enter"], label: "Run", command: "run" },
     ]);
+  });
+
+  it("listens to a root window outside the current window", () => {
+    const { bus, clock } = setup();
+    const { frameWindow } = appendFrameRoot();
+    const producer = trackProducer(createShortcutProducer({ bus, clock, getRoot: () => frameWindow }));
+    producer.start();
+
+    keydown(frameWindow, { key: "s", ctrlKey: true });
+
+    expect(bus.drain().map((event) => event.payload)).toEqual([
+      { keys: ["Ctrl", "S"], label: "Save", command: "save" },
+    ]);
+  });
+
+  it("reattaches when the active element root moves to another document", () => {
+    vi.useFakeTimers();
+    try {
+      const { bus, clock } = setup();
+      const first = document.createElement("div");
+      const { frameDocument } = appendFrameRoot();
+      const second = frameDocument.createElement("div");
+      document.body.append(first);
+      frameDocument.body.append(second);
+      let root: Window | HTMLElement | null = first;
+      const producer = trackProducer(createShortcutProducer({ bus, clock, getRoot: () => root }));
+      producer.start();
+
+      keydown(first, { key: "s", ctrlKey: true });
+      root = second;
+      vi.advanceTimersByTime(20);
+      keydown(second, { key: "Enter", ctrlKey: true, timeStamp: 600 });
+      keydown(first, { key: "z", ctrlKey: true, timeStamp: 1200 });
+
+      expect(bus.drain().map((event) => event.payload)).toEqual([
+        { keys: ["Ctrl", "S"], label: "Save", command: "save" },
+        { keys: ["Ctrl", "Enter"], label: "Run", command: "run" },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("stops current capture, restarts, and only dispose permanently disables shortcuts", () => {
@@ -175,7 +265,7 @@ describe("createShortcutProducer", () => {
 
   it("does not attach when getRoot returns null", () => {
     const { bus, clock } = setup();
-    const producer = createShortcutProducer({ bus, clock, getRoot: () => null });
+    const producer = trackProducer(createShortcutProducer({ bus, clock, getRoot: () => null }));
     producer.start();
 
     keydown(window, { key: "s", ctrlKey: true });
