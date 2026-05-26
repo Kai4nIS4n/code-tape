@@ -120,7 +120,7 @@ export function ReplayPage() {
         onPlayPause={() =>
           schedulerState.status === "playing" ? scheduler.pause() : scheduler.play()
         }
-        onSeek={(target) => void scheduler.seek(target)}
+        onSeek={(target) => scheduler.seek(target)}
         onRate={(rate) => scheduler.setRate(rate)}
         volume={volume}
         muted={muted}

@@ -10,7 +10,7 @@ export type ReplayControlsProps = {
   state: ReplaySchedulerState;
   durationMs: number;
   onPlayPause(): void;
-  onSeek(targetMs: number): void;
+  onSeek(targetMs: number): Promise<void> | void;
   onRate(rate: ReplayPlaybackRate): void;
   volume: number;
   muted: boolean;
@@ -80,9 +80,9 @@ export function ReplayControls({
     onSeek(targetMs);
   };
 
-  const handleSliderCommit = (value: number) => {
+  const handleSliderCommit = async (value: number) => {
     const targetMs = (value / 100) * safeDuration;
-    onSeek(targetMs);
+    await onSeek(targetMs);
     if (!isPlaying && state.status !== "error" && state.status !== "loading") {
       onPlayPause();
     }
