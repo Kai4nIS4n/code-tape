@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import {
-  createReplayScheduler,
-  defaultTickStrategy,
-} from "./replayScheduler";
+import { createReplayScheduler, defaultTickStrategy } from "./replayScheduler";
 import { createTimelineClock } from "./timelineClock";
 import { ReplayControls } from "./ReplayControls";
 import { CodeEditor } from "@/features/editor/CodeEditor";
@@ -62,12 +59,13 @@ export function ReplayPage() {
     });
   }, []);
 
-  const [schedulerState, setSchedulerState] = useState<ReplaySchedulerState>(
-    INITIAL_SCHEDULER_STATE,
-  );
+  const [schedulerState, setSchedulerState] =
+    useState<ReplaySchedulerState>(INITIAL_SCHEDULER_STATE);
   const [stableState, setStableState] = useState<ReplayStableState>(INITIAL_STABLE_STATE);
   const [pkg, setPkg] = useState<RecordingPackageV1 | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [volume, setVolume] = useState(100);
+  const [muted, setMuted] = useState(false);
 
   useEffect(() => scheduler.subscribe(setSchedulerState), [scheduler]);
 
@@ -78,7 +76,9 @@ export function ReplayPage() {
       const result = await repository.load(id);
       if (cancelled) return;
       if (!result.ok) {
-        setLoadError(`${result.error.code}: ${"message" in result.error ? result.error.message : ""}`);
+        setLoadError(
+          `${result.error.code}: ${"message" in result.error ? result.error.message : ""}`,
+        );
         return;
       }
       setPkg(result.package);
@@ -122,6 +122,16 @@ export function ReplayPage() {
         }
         onSeek={(target) => void scheduler.seek(target)}
         onRate={(rate) => scheduler.setRate(rate)}
+        volume={volume}
+        muted={muted}
+        onVolume={(v) => {
+          setVolume(v);
+          scheduler.setVolume(v);
+        }}
+        onMuted={(m) => {
+          setMuted(m);
+          scheduler.setMuted(m);
+        }}
       />
     </div>
   );

@@ -51,3 +51,14 @@ if (typeof window !== "undefined" && !("matchMedia" in window)) {
     }),
   });
 }
+
+if (typeof window !== "undefined" && !("ResizeObserver" in window)) {
+  Object.defineProperty(window, "ResizeObserver", {
+    writable: true,
+    value: class ResizeObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  });
+}

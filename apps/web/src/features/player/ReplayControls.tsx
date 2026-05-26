@@ -1,8 +1,10 @@
-import type {
-  ReplayPlaybackRate,
-  ReplaySchedulerState,
-} from "@/shared/recording-schema";
+import type { ReplayPlaybackRate, ReplaySchedulerState } from "@/shared/recording-schema";
 import { formatDurationMs } from "@/shared/time/duration";
+import { IconButton, Slider, Toggle, Toolbar, ToolbarSeparator, cn } from "@/shared/ui";
+import { Pause, Play, Volume2, VolumeX, Gauge } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import * as RadixPopover from "@radix-ui/react-popover";
+import * as RadixSlider from "@radix-ui/react-slider";
 
 export type ReplayControlsProps = {
   state: ReplaySchedulerState;
@@ -10,46 +12,214 @@ export type ReplayControlsProps = {
   onPlayPause(): void;
   onSeek(targetMs: number): void;
   onRate(rate: ReplayPlaybackRate): void;
+  volume: number;
+  muted: boolean;
+  onVolume(volume: number): void;
+  onMuted(muted: boolean): void;
 };
 
-/**
- * ReplayControls — playback bar (play/pause, progress, time, rate, volume).
- *
- * STUB. Real implementation belongs to issue
- * `[P0] ReplayControls 控制条 UI（含倍速/音量/进度条）`.
- *
- * 实装要点：
- *   - Slider 用 shared/ui/Slider；onChange = light seek (UI only), onCommit = real seek
- *   - 倍速：0.5 / 1 / 1.5 / 2 用 Popover 暴露
- *   - 音量：Slider 0-100；mute Toggle
- *   - 章节标记：从 schedulerState 衍生（实际上得用 index.markersByTime），在 issue 内
- *     接通；当前只显示空 tick 槽
- *   - 状态色：playing=primary, seeking=warning, ended=success, error=danger
- *   - 时间字号用 font-mono 保持等宽
- */
-export function ReplayControls({ state, durationMs }: ReplayControlsProps) {
+const PLAYBACK_RATES: ReplayPlaybackRate[] = [2, 1.5, 1, 0.5];
+
+export function ReplayControls({
+  state,
+  durationMs,
+  onPlayPause,
+  onSeek,
+  onRate,
+  volume,
+  muted,
+  onVolume,
+  onMuted,
+}: ReplayControlsProps) {
+  const [ratePopoverOpen, setRatePopoverOpen] = useState(false);
+  const [volumePopoverOpen, setVolumePopoverOpen] = useState(false);
+  const rateCloseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const volumeCloseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isPlaying = state.status === "playing";
+  const safeDuration = Math.max(0, durationMs);
+  const currentTime = Math.min(Math.max(0, state.timelineTimeMs), safeDuration);
+  const progressPercent = safeDuration > 0 ? (currentTime / safeDuration) * 100 : 0;
+
+  useEffect(() => {
+    return () => {
+      if (rateCloseTimeoutRef.current) clearTimeout(rateCloseTimeoutRef.current);
+      if (volumeCloseTimeoutRef.current) clearTimeout(volumeCloseTimeoutRef.current);
+    };
+  }, []);
+
+  const openRatePopover = () => {
+    if (rateCloseTimeoutRef.current) clearTimeout(rateCloseTimeoutRef.current);
+    rateCloseTimeoutRef.current = setTimeout(() => {
+      setRatePopoverOpen(true);
+    }, 200);
+  };
+
+  const closeRatePopover = () => {
+    if (rateCloseTimeoutRef.current) clearTimeout(rateCloseTimeoutRef.current);
+    rateCloseTimeoutRef.current = setTimeout(() => {
+      setRatePopoverOpen(false);
+    }, 200);
+  };
+
+  const openVolumePopover = () => {
+    if (volumeCloseTimeoutRef.current) clearTimeout(volumeCloseTimeoutRef.current);
+    volumeCloseTimeoutRef.current = setTimeout(() => {
+      setVolumePopoverOpen(true);
+    }, 200);
+  };
+
+  const closeVolumePopover = () => {
+    if (volumeCloseTimeoutRef.current) clearTimeout(volumeCloseTimeoutRef.current);
+    volumeCloseTimeoutRef.current = setTimeout(() => {
+      setVolumePopoverOpen(false);
+    }, 200);
+  };
+
+  const handleSliderChange = (value: number) => {
+    const targetMs = (value / 100) * safeDuration;
+    onSeek(targetMs);
+  };
+
+  const handleSliderCommit = (value: number) => {
+    const targetMs = (value / 100) * safeDuration;
+    onSeek(targetMs);
+    if (!isPlaying && state.status !== "error" && state.status !== "loading") {
+      onPlayPause();
+    }
+  };
+
+  const handleVolumeChange = (v: number) => {
+    if (muted && v > 0) {
+      onMuted(false);
+    }
+    if (!muted && v === 0) {
+      onMuted(true);
+    }
+    onVolume(v);
+  };
+
   return (
-    <div className="flex h-12 items-center gap-3 border-t border-border bg-surface/80 px-4">
-      <span className="font-mono text-sm text-muted">{formatDurationMs(state.timelineTimeMs)}</span>
-      <div className="flex-1">
-        <div className="h-1 w-full rounded-full bg-border">
-          <div
-            className="h-full rounded-full bg-primary transition-[width] duration-100"
-            style={{
-              width: durationMs > 0
-                ? `${Math.min(100, (state.timelineTimeMs / durationMs) * 100)}%`
-                : "0%",
-            }}
-          />
-        </div>
+    <Toolbar className="h-auto min-h-14 flex-wrap gap-3 px-4 py-2">
+      <IconButton
+        label={isPlaying ? "暂停" : "播放"}
+        icon={isPlaying ? <Pause size={18} /> : <Play size={18} />}
+        variant="solid"
+        disabled={
+          state.status === "loading" || state.status === "seeking" || state.status === "error"
+        }
+        onClick={onPlayPause}
+      />
+
+      <div className="min-w-[3.5rem] text-right">
+        <span className="font-mono text-sm tabular-nums text-foreground">
+          {formatDurationMs(currentTime)}
+        </span>
       </div>
-      <span className="font-mono text-sm text-muted">{formatDurationMs(durationMs)}</span>
-      <span className="text-xs uppercase tracking-wide text-muted">
-        {state.status} · {state.playbackRate}x
-      </span>
-      <span className="text-xs text-muted">
-        ReplayControls stub · 待 issue 实装
-      </span>
-    </div>
+
+      <div className="flex-1 min-w-[120px]">
+        <Slider
+          value={progressPercent}
+          min={0}
+          max={100}
+          step={0.1}
+          disabled={safeDuration === 0}
+          ariaLabel="播放进度"
+          onChange={handleSliderChange}
+          onCommit={handleSliderCommit}
+        />
+      </div>
+
+      <div className="min-w-[3.5rem]">
+        <span className="font-mono text-sm tabular-nums text-muted">
+          {formatDurationMs(safeDuration)}
+        </span>
+      </div>
+
+      <ToolbarSeparator />
+
+      <div onMouseEnter={openRatePopover} onMouseLeave={closeRatePopover}>
+        <RadixPopover.Root open={ratePopoverOpen} onOpenChange={setRatePopoverOpen}>
+          <RadixPopover.Trigger asChild>
+            <IconButton label="倍速" icon={<Gauge size={18} />} variant="ghost" />
+          </RadixPopover.Trigger>
+          <RadixPopover.Portal>
+            <RadixPopover.Content
+              align="center"
+              side="top"
+              sideOffset={10}
+              className={cn(
+                "z-50 w-16 rounded-sm border border-border bg-surface p-1 text-foreground shadow-elevation-2",
+                "outline-none data-[state=delayed-open]:animate-fade-in",
+              )}
+            >
+              <div className="flex flex-col gap-0.5" role="listbox">
+                {PLAYBACK_RATES.map((rate) => (
+                  <button
+                    key={rate}
+                    type="button"
+                    role="option"
+                    aria-selected={state.playbackRate === rate}
+                    className={cn(
+                      "w-full rounded px-2 py-1.5 text-sm font-mono tabular-nums transition-colors text-center font-normal",
+                      state.playbackRate === rate
+                        ? "bg-primary/10 text-primary"
+                        : "text-foreground hover:bg-surface-raised",
+                    )}
+                    onClick={() => onRate(rate)}
+                  >
+                    {rate}x
+                  </button>
+                ))}
+              </div>
+            </RadixPopover.Content>
+          </RadixPopover.Portal>
+        </RadixPopover.Root>
+      </div>
+
+      <div onMouseEnter={openVolumePopover} onMouseLeave={closeVolumePopover}>
+        <RadixPopover.Root open={volumePopoverOpen} onOpenChange={setVolumePopoverOpen}>
+          <RadixPopover.Trigger asChild>
+            <Toggle
+              pressed={muted}
+              onPressedChange={(pressed) => onMuted(pressed)}
+              label={muted ? "取消静音" : "静音"}
+              icon={<Volume2 size={18} />}
+              iconPressed={<VolumeX size={18} />}
+            />
+          </RadixPopover.Trigger>
+          <RadixPopover.Portal>
+            <RadixPopover.Content
+              align="center"
+              side="top"
+              sideOffset={10}
+              className={cn(
+                "z-50 w-12 rounded-sm border border-border bg-surface p-2 text-foreground shadow-elevation-2",
+                "outline-none data-[state=delayed-open]:animate-fade-in",
+              )}
+            >
+              <div className="flex flex-col gap-2 items-center">
+                <span className="text-sm font-mono tabular-nums">{muted ? 0 : volume}</span>
+                <RadixSlider.Root
+                  className="relative flex h-24 w-full select-none items-center flex-col"
+                  value={[volume]}
+                  min={0}
+                  max={100}
+                  step={1}
+                  onValueChange={(values) => handleVolumeChange(values[0] ?? 0)}
+                  onValueCommit={(values) => handleVolumeChange(values[0] ?? 0)}
+                  aria-label="音量"
+                  orientation="vertical"
+                >
+                  <RadixSlider.Track className="relative w-1 h-full grow rounded-full bg-border">
+                    <RadixSlider.Range className="absolute w-full rounded-full bg-primary" />
+                  </RadixSlider.Track>
+                  <RadixSlider.Thumb className="block h-3 w-3 rounded-full bg-foreground shadow-elevation-2 transition-transform duration-150 ease-out-soft hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-background" />
+                </RadixSlider.Root>
+              </div>
+            </RadixPopover.Content>
+          </RadixPopover.Portal>
+        </RadixPopover.Root>
+      </div>
+    </Toolbar>
   );
 }
