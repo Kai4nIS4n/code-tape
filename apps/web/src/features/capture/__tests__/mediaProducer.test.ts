@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createMediaProducer } from "../mediaProducer";
 import type { MediaProducerDeps } from "../types";
 import type { MediaDevicesController, EventBus, MediaCapability } from "@/shared/recording-schema";
+import { createRecordingClock } from "@/features/recorder";
 
 describe("createMediaProducer", () => {
   let mockBus: { emit: ReturnType<typeof vi.fn> };
@@ -12,15 +13,25 @@ describe("createMediaProducer", () => {
   };
   let deps: MediaProducerDeps;
   let listeners: ((cap: MediaCapability) => void)[] = [];
+  let wall: number;
+  let clock: ReturnType<typeof createRecordingClock>;
+
+  const defaultCapability = (): MediaCapability => ({
+    audio: "available",
+    camera: "available",
+    selectedAudioDeviceId: null,
+    selectedCameraDeviceId: null,
+  });
 
   beforeEach(() => {
     vi.useFakeTimers();
     listeners = [];
-    
+    wall = 1000;
+
     mockBus = {
       emit: vi.fn(),
     };
-    
+
     mockDevices = {
       subscribe: vi.fn((listener) => {
         listeners.push(listener);
@@ -32,11 +43,14 @@ describe("createMediaProducer", () => {
       release: vi.fn(),
     };
 
+    clock = createRecordingClock({ nowProvider: () => wall });
+    clock.start();
+
     deps = {
       bus: mockBus as unknown as EventBus,
       devices: mockDevices as unknown as MediaDevicesController,
-      clock: {} as unknown as MediaProducerDeps["clock"],
-      getCapability: vi.fn(),
+      clock,
+      getCapability: vi.fn(defaultCapability),
     };
   });
 
@@ -54,6 +68,32 @@ describe("createMediaProducer", () => {
     };
     listeners.forEach((l) => l(fullCap));
   };
+
+  it("should emit media-warning on start when getCapability already reports errors", () => {
+    deps.getCapability = vi.fn((): MediaCapability => ({
+      ...defaultCapability(),
+      audio: "denied",
+      camera: "busy",
+    }));
+
+    const producer = createMediaProducer(deps);
+    producer.start();
+
+    expect(deps.getCapability).toHaveBeenCalled();
+    expect(mockBus.emit).toHaveBeenCalledTimes(2);
+    expect(mockBus.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "media-warning",
+        payload: { target: "audio", code: "permission-denied", message: expect.any(String) },
+      })
+    );
+    expect(mockBus.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "media-warning",
+        payload: { target: "camera", code: "busy", message: expect.any(String) },
+      })
+    );
+  });
 
   it("should emit media-warning when capability downgrades", () => {
     const producer = createMediaProducer(deps);
@@ -132,14 +172,13 @@ describe("createMediaProducer", () => {
     );
   });
 
-  it("should emit camera-position with 50ms throttle and clamp coordinates", () => {
+  it("should emit camera-position with 50ms throttle using injected clock and clamp coordinates", () => {
     const producer = createMediaProducer(deps);
     producer.start();
 
-    // Out of bounds
+    // Out of bounds 闁炽儻鎷� flushes immediately at clock.now() === 0
     producer.reportCameraPosition({ x: -1, y: 2 });
-    vi.advanceTimersByTime(10);
-    
+
     expect(mockBus.emit).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "camera-position",
@@ -148,15 +187,15 @@ describe("createMediaProducer", () => {
     );
     mockBus.emit.mockClear();
 
-    // Fast successive calls should be throttled
+    // Advance injected clock within throttle window
+    wall += 10;
     producer.reportCameraPosition({ x: 0.5, y: 0.5 });
     producer.reportCameraPosition({ x: 0.6, y: 0.6 });
     producer.reportCameraPosition({ x: 0.7, y: 0.7 });
-    
-    expect(mockBus.emit).not.toHaveBeenCalled(); // Still within the 50ms window since last emit which was at t=0
-    
-    vi.advanceTimersByTime(50);
-    // Should emit the latest one
+
+    expect(mockBus.emit).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(40);
     expect(mockBus.emit).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "camera-position",
@@ -195,6 +234,29 @@ describe("createMediaProducer", () => {
 
     producer.stop();
     expect(listeners.length).toBe(0);
+  });
+
+  it("should re-emit media-warning after stop and restart when capability is still failing", () => {
+    deps.getCapability = vi.fn((): MediaCapability => ({
+      ...defaultCapability(),
+      audio: "denied",
+    }));
+
+    const producer = createMediaProducer(deps);
+    producer.start();
+    expect(mockBus.emit).toHaveBeenCalledTimes(1);
+
+    producer.stop();
+    mockBus.emit.mockClear();
+
+    producer.start();
+    expect(mockBus.emit).toHaveBeenCalledTimes(1);
+    expect(mockBus.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "media-warning",
+        payload: { target: "audio", code: "permission-denied", message: expect.any(String) },
+      })
+    );
   });
 
   it("should not emit duplicate media-warnings for continuous identical capability errors", () => {
@@ -259,11 +321,11 @@ describe("createMediaProducer", () => {
     );
 
     mockBus.emit.mockClear();
-    vi.advanceTimersByTime(500); // Ensure enough time passed
+    wall += 500;
 
     // Restart and test dispose
     producer.start();
-    producer.reportCameraPosition({ x: 0.3, y: 0.3 }); // flushes immediately because time passed
+    producer.reportCameraPosition({ x: 0.3, y: 0.3 }); // flushes immediately because injected clock advanced
     producer.reportCameraPosition({ x: 0.4, y: 0.4 }); // queued
 
     const { dispose } = producer;

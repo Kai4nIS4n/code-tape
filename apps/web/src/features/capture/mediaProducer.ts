@@ -2,6 +2,7 @@ import type { CreateMediaProducer, MediaProducerHandle } from "./types";
 import type { MediaWarningPayload, MediaCapability } from "@/shared/recording-schema";
 
 export const createMediaProducer: CreateMediaProducer = (deps): MediaProducerHandle => {
+  const { clock } = deps;
   let isPaused = false;
   let isStopped = true;
   let unsubscribeDevices: (() => void) | null = null;
@@ -25,7 +26,7 @@ export const createMediaProducer: CreateMediaProducer = (deps): MediaProducerHan
       payload: pendingPosition
     });
     pendingPosition = null;
-    lastPositionTime = Date.now();
+    lastPositionTime = clock.now();
   };
 
   const stopProducer = () => {
@@ -81,7 +82,10 @@ export const createMediaProducer: CreateMediaProducer = (deps): MediaProducerHan
       if (!isStopped || unsubscribeDevices) return;
       isStopped = false;
       isPaused = false;
+      lastAudioState = "available";
+      lastCameraState = "available";
       unsubscribeDevices = deps.devices.subscribe(handleCapability);
+      handleCapability(deps.getCapability());
     },
     pause() {
       isPaused = true;
@@ -135,7 +139,7 @@ export const createMediaProducer: CreateMediaProducer = (deps): MediaProducerHan
       const y = Math.min(Math.max(position.y, 0), 1);
       pendingPosition = { x, y };
       
-      const now = Date.now();
+      const now = clock.now();
       if (now - lastPositionTime >= 50) {
         if (throttleTimer) {
           clearTimeout(throttleTimer);
