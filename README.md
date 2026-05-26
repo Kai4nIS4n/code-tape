@@ -4,6 +4,8 @@
     <img src="apps/web/public/favicon.png" alt="code-tape Logo" width="200"/>
 </div>
 
+## 完成度优先
+
 > [规范工作流程](docs/规范工作流程.md)
 | [技术模块拆解](docs/技术模块拆解.md)
 | [项目时间规划](docs/项目时间规划.md)
@@ -56,3 +58,4 @@
 - [ADR-023: 回放媒体通过 MediaClockAdapter 映射到事实时间轴](https://github.com/ceilf6/code-tape/discussions/50)
 - [ADR-024: iframe runtime 必须校验 source、runId、消息 schema 并设置超时](https://github.com/ceilf6/code-tape/discussions/51)
 - [ADR-025: P0 主演示环境锁定桌面 Chrome/Edge latest 并设量化预算](https://github.com/ceilf6/code-tape/discussions/52)
+- [ADR-026: 开发模式采用 Google Chunk 小粒度主干协作](https://github.com/ceilf6/code-tape/discussions/70)

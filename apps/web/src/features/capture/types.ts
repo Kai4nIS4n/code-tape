@@ -35,6 +35,11 @@ export type EditorProducerDeps = ProducerCommonDeps & {
   getEditor(): MonacoEditor.IStandaloneCodeEditor | null;
   /** Reports the *current* editor language so language-change events can be deduped. */
   getCurrentLanguage(): RecordingLanguage;
+  /** Applies a producer-driven language change to the current Monaco model. */
+  setModelLanguage?(
+    model: MonacoEditor.ITextModel,
+    language: RecordingLanguage,
+  ): void;
 };
 
 export type EditorProducerHandle = EventProducer & {
@@ -102,6 +107,19 @@ export type RuntimeProducerDeps = ProducerCommonDeps & {
   runtime: IframeRuntime;
 };
 
+export type RuntimeProducerRunResult =
+  | IframeRunResult
+  | {
+      runId: string;
+      status: "error";
+      phase: "transpile";
+      message: string;
+      stack?: string;
+      stdout: string[];
+      stderr: string[];
+      previewHtml: null;
+    };
+
 export type RuntimeProducerHandle = EventProducer & {
   /**
    * Compile + execute the user's source. Emits `run-start`, then exactly one of
@@ -111,7 +129,7 @@ export type RuntimeProducerHandle = EventProducer & {
   trigger(input: {
     language: "javascript" | "typescript";
     source: string;
-  }): Promise<IframeRunResult>;
+  }): Promise<RuntimeProducerRunResult>;
 };
 
 export type CreateRuntimeProducer = (deps: RuntimeProducerDeps) => RuntimeProducerHandle;

@@ -1,31 +1,34 @@
 {
   "version": 1,
-  "updatedAt": "2026-05-25T11:40:59Z",
+  "updatedAt": "2026-05-26T03:06:54Z",
   "students": {
     "ceilf6": {
-      "activeIssue": 56,
+      "activeIssue": null,
       "completedIssues": [
         11,
         10,
         8,
         40,
-        55
+        55,
+        56,
+        65
       ],
       "reviewedIssues": [
         4,
         9,
         5,
         7,
-        57
+        57,
+        59
       ],
       "bugPenalties": [],
-      "developmentScore": 9,
-      "reviewScore": 1.75,
+      "developmentScore": 13.5,
+      "reviewScore": 2.5,
       "penaltyScore": 0,
-      "totalScore": 10.75
+      "totalScore": 16
     },
     "MINTPIPERAS": {
-      "activeIssue": null,
+      "activeIssue": 67,
       "completedIssues": [
         9,
         60
@@ -47,16 +50,18 @@
         5
       ],
       "reviewedIssues": [
-        60
+        60,
+        56,
+        65
       ],
       "bugPenalties": [],
       "developmentScore": 1.75,
-      "reviewScore": 0.75,
+      "reviewScore": 2.25,
       "penaltyScore": 0,
-      "totalScore": 2.5
+      "totalScore": 4
     },
     "yangchloeeeee": {
-      "activeIssue": null,
+      "activeIssue": 66,
       "completedIssues": [
         4,
         7,
@@ -74,16 +79,17 @@
       "totalScore": 7.25
     },
     "JunMang01": {
-      "activeIssue": 59,
+      "activeIssue": null,
       "completedIssues": [
-        6
+        6,
+        59
       ],
       "reviewedIssues": [],
       "bugPenalties": [],
-      "developmentScore": 0.75,
+      "developmentScore": 3,
       "reviewScore": 0,
       "penaltyScore": 0,
-      "totalScore": 0.75
+      "totalScore": 3
     },
     "cecilyw": {
       "activeIssue": 58,
@@ -226,11 +232,11 @@
       "stack": [
         "typescript"
       ],
-      "status": "claimed",
+      "status": "closed",
       "assignee": "ceilf6",
       "claimedAt": "2026-05-25T03:55:02Z",
-      "closedAt": null,
-      "mergedPr": null
+      "closedAt": "2026-05-25T13:02:09Z",
+      "mergedPr": 64
     },
     "57": {
       "number": 57,
@@ -268,11 +274,11 @@
         "react",
         "typescript"
       ],
-      "status": "claimed",
+      "status": "closed",
       "assignee": "JunMang01",
       "claimedAt": "2026-05-25T02:50:19Z",
-      "closedAt": null,
-      "mergedPr": null
+      "closedAt": "2026-05-26T03:06:26Z",
+      "mergedPr": 69
     },
     "60": {
       "number": 60,
@@ -287,6 +293,47 @@
       "claimedAt": "2026-05-25T02:22:26Z",
       "closedAt": "2026-05-25T10:31:09Z",
       "mergedPr": 62
+    },
+    "65": {
+      "number": 65,
+      "title": "[P0] editorProducer 实装：内容/选区/滚动/语言事件采集",
+      "score": 3,
+      "stack": [
+        "typescript"
+      ],
+      "status": "closed",
+      "assignee": "ceilf6",
+      "claimedAt": "2026-05-25T13:14:34Z",
+      "closedAt": "2026-05-26T03:06:54Z",
+      "mergedPr": 68
+    },
+    "66": {
+      "number": 66,
+      "title": "[P0] pointerProducer + shortcutProducer 实装",
+      "score": 3,
+      "stack": [
+        "react",
+        "typescript"
+      ],
+      "status": "claimed",
+      "assignee": "yangchloeeeee",
+      "claimedAt": "2026-05-25T13:19:39Z",
+      "closedAt": null,
+      "mergedPr": null
+    },
+    "67": {
+      "number": 67,
+      "title": "[P0] mediaProducer 实装：媒体开关、权限告警与摄像头位置事件",
+      "score": 3,
+      "stack": [
+        "react",
+        "typescript"
+      ],
+      "status": "claimed",
+      "assignee": "MINTPIPERAS",
+      "claimedAt": "2026-05-25T13:16:07Z",
+      "closedAt": null,
+      "mergedPr": null
     }
   },
   "ledger": [
@@ -487,6 +534,42 @@
       "developerDelta": 2.25,
       "reviewerDelta": 0.75,
       "createdAt": "2026-05-25T11:40:59Z"
+    },
+    {
+      "id": "pr-64-merge",
+      "type": "feature_merge",
+      "issue": 56,
+      "pr": 64,
+      "score": 3,
+      "developer": "ceilf6",
+      "reviewer": "Suxian2001",
+      "developerDelta": 2.25,
+      "reviewerDelta": 0.75,
+      "createdAt": "2026-05-25T13:02:09Z"
+    },
+    {
+      "id": "pr-69-merge",
+      "type": "feature_merge",
+      "issue": 59,
+      "pr": 69,
+      "score": 3,
+      "developer": "JunMang01",
+      "reviewer": "ceilf6",
+      "developerDelta": 2.25,
+      "reviewerDelta": 0.75,
+      "createdAt": "2026-05-26T03:06:26Z"
+    },
+    {
+      "id": "pr-68-merge",
+      "type": "feature_merge",
+      "issue": 65,
+      "pr": 68,
+      "score": 3,
+      "developer": "ceilf6",
+      "reviewer": "Suxian2001",
+      "developerDelta": 2.25,
+      "reviewerDelta": 0.75,
+      "createdAt": "2026-05-26T03:06:54Z"
     }
   ]
 }
