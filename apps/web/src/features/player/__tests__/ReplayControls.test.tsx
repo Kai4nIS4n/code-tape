@@ -145,6 +145,29 @@ describe("ReplayControls", () => {
     expect(screen.getAllByText("00:00")).toHaveLength(2);
   });
 
+  it.each(["loading", "seeking", "error"] as const)(
+    "disables progress seeking while status is %s",
+    (status) => {
+      const onSeek = vi.fn();
+      const onPlay = vi.fn();
+      renderControls({
+        state: state(status, { timelineTimeMs: 20_000 }),
+        durationMs: 100_000,
+        onSeek,
+        onPlay,
+      });
+
+      const progressSlider = screen.getByRole("slider", { name: "播放进度" });
+      expect(progressSlider).toBeDisabled();
+
+      fireEvent.change(progressSlider, { target: { value: "25" } });
+      fireEvent.mouseUp(progressSlider);
+
+      expect(onSeek).not.toHaveBeenCalled();
+      expect(onPlay).not.toHaveBeenCalled();
+    },
+  );
+
   describe("handleSliderCommit logic", () => {
     it("updates preview locally while dragging and seeks only on commit", async () => {
       const onSeek = vi.fn();

@@ -44,6 +44,11 @@ export function ReplayControls({
   const baseProgressPercent = safeDuration > 0 ? (baseCurrentTime / safeDuration) * 100 : 0;
   const currentProgressPercent = pendingProgressPercent ?? baseProgressPercent;
   const currentTime = (currentProgressPercent / 100) * safeDuration;
+  const timelineDisabled =
+    safeDuration === 0 ||
+    state.status === "loading" ||
+    state.status === "seeking" ||
+    state.status === "error";
 
   useEffect(() => {
     return () => {
@@ -81,10 +86,12 @@ export function ReplayControls({
   };
 
   const handleSliderChange = (value: number) => {
+    if (timelineDisabled) return;
     setPendingProgressPercent(value);
   };
 
   const handleSliderCommit = async (value: number) => {
+    if (timelineDisabled) return;
     const targetMs = (value / 100) * safeDuration;
     const initialStatus = state.status;
     setPendingProgressPercent(null);
@@ -128,7 +135,7 @@ export function ReplayControls({
           min={0}
           max={100}
           step={0.1}
-          disabled={safeDuration === 0}
+          disabled={timelineDisabled}
           ariaLabel="播放进度"
           onChange={handleSliderChange}
           onCommit={handleSliderCommit}
