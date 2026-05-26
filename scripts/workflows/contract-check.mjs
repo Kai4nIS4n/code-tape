@@ -62,7 +62,7 @@ function getChangedFiles(mode) {
         stdio: 'inherit',
       });
     }
-    return gitLines(['diff', '--name-only', `--diff-filter=${CONTRACT_DIFF_FILTER}`, `origin/${process.env.GITHUB_BASE_REF}...HEAD`]);
+    return gitLines(['diff', '--name-only', `--diff-filter=${CONTRACT_DIFF_FILTER}`, `${baseRef}...HEAD`]);
   }
   return combineChangedFiles(
     gitLines(['diff', '--name-only', `--diff-filter=${CONTRACT_DIFF_FILTER}`, 'HEAD']),

@@ -387,6 +387,8 @@ test('contract check reuses an existing CI base ref before fetching', () => {
 
   assert.match(contractCheck, /const baseRef = `origin\/\$\{process\.env\.GITHUB_BASE_REF\}`/u);
   assert.match(contractCheck, /if \(!gitRefExists\(baseRef\)\)/u);
+  assert.match(contractCheck, /`\$\{baseRef\}\.\.\.HEAD`/u);
+  assert.doesNotMatch(contractCheck, /`origin\/\$\{process\.env\.GITHUB_BASE_REF\}\.\.\.HEAD`/u);
   assert.match(contractCheck, /function gitRefExists\(ref\)/u);
 });
 
