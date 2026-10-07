@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   claim:
-    if: github.event.issue.pull_request == null && github.event.comment.body == '认领'
+    if: github.repository == 'ceilf6/code-tape' && github.event.issue.pull_request == null && github.event.comment.body == '认领'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

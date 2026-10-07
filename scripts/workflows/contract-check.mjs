@@ -17,11 +17,11 @@ try {
   if (command === 'bootstrap') {
     runBootstrap();
   } else if (command === 'local') {
-    runGitNexusContract({ mode: 'local' });
+    runContract({ mode: 'local', analyze: true });
   } else if (command === 'gitnexus') {
-    runGitNexusContract({ mode: 'ci' });
+    runContract({ mode: 'ci', analyze: true });
   } else if (command === 'check') {
-    runGitNexusContract({ mode: process.env.CI ? 'ci' : 'local' });
+    runContract({ mode: process.env.CI ? 'ci' : 'local' });
   } else {
     throw new Error(`unknown contract command: ${command}`);
   }
@@ -33,24 +33,24 @@ try {
 function runBootstrap() {
   execFileSync('node', ['scripts/workflows/install-hooks.mjs'], { stdio: 'inherit' });
   console.log('Agent bootstrap complete.');
-  console.log('- Before editing code: run npm run quality:predev');
+  console.log('- Before editing code: run npm run quality:predev (checks hook setup only)');
   console.log('- Commit with git commit so the pre-commit hook runs quality:precommit');
   console.log('- Push with git push so the pre-push hook runs quality:local');
-  console.log('- For critical skeleton changes: read GitNexus detect_changes/query/context/impact output');
+  console.log('- For critical skeleton changes: inspect affected callers and tests; optionally run npm run contract:local for GitNexus analysis');
   console.log(
     '- Do not run hook-owned quality gates manually unless diagnosing a failure, bypassing hooks, or working without installed hooks',
   );
   console.log('- CI remains the final contract gate.');
 }
 
-function runGitNexusContract({ mode }) {
-  runGitNexusAnalyze(mode);
+function runContract({ mode, analyze = false }) {
+  if (analyze) runGitNexusAnalyze(mode);
 
   const changedFiles = getChangedFiles(mode);
   const impactSummary = getImpactSummary();
   const result = evaluateGitNexusContract({ changedFiles, impactSummary });
 
-  printContractResult('GitNexus contract', result);
+  printContractResult('Change contract', result);
   if (!result.ok) process.exitCode = 1;
 }
 
@@ -74,8 +74,9 @@ function getChangedFiles(mode) {
 }
 
 function getImpactSummary() {
-  if (process.env.GITNEXUS_IMPACT_SUMMARY) {
-    return extractImpactSummary(process.env.GITNEXUS_IMPACT_SUMMARY);
+  const summary = process.env.CONTRACT_IMPACT_SUMMARY ?? process.env.GITNEXUS_IMPACT_SUMMARY;
+  if (summary) {
+    return extractImpactSummary(summary);
   }
   if (process.env.GITHUB_EVENT_PATH && existsSync(process.env.GITHUB_EVENT_PATH)) {
     const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));

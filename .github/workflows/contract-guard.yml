@@ -24,6 +24,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm run contract:gitnexus
+      - run: npm run contract:check
         env:
-          GITNEXUS_IMPACT_SUMMARY: ${{ github.event.pull_request.body }}
+          CONTRACT_IMPACT_SUMMARY: ${{ github.event.pull_request.body }}

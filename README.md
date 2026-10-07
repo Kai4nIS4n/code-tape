@@ -6,6 +6,8 @@
 
 ## 完成度优先
 
+当前个人升级的提交、推送和 PR 目标为 [Kai4nIS4n/code-tape](https://github.com/Kai4nIS4n/code-tape)。默认在这个 fork 内完成分支开发与审查，不向上游提交 PR。下述培训认领/计分机制仅适用于参与上游协作，个人升级不要求上游 Issue 或维护者确认。
+
 > [规范工作流程](docs/规范工作流程.md)
 | [技术模块拆解](docs/技术模块拆解.md)
 | [项目时间规划](docs/项目时间规划.md)
@@ -24,10 +26,11 @@
         - 其中 CR 技能来自 [ceilf6-skills](https://github.com/ceilf6/ceilf6-skills/tree/main/code-reviewer)
         - > 生成-评估分离：Anthropic 证明模型会存在自评估的系统性缺陷
 - Git hooks
+    - 首次 checkout 安装；已安装时 `npm run quality:predev` 只读检查，不重复写 Git 配置
     - `pre-commit` 运行 `npm run quality:precommit`，提交前覆盖仓库测试、Web lint、Web 单测和构建
-    - `pre-push` 运行 `npm run quality:local`，推送前刷新 GitNexus 索引并执行完整本地质量闸门
+    - `pre-push` 运行 `npm run quality:local`，推送前检查变更契约并执行完整本地质量闸门；保留 Git LFS 上传
 - 知识库
-    - 通过 GitNexus 观测代码的级联反应，辅助 CICD 把控
+    - 关键模块改动先检查调用者和相关测试，复杂改动可运行 `npm run contract:local` 使用 GitNexus；自动检查不依赖图谱扫描
     - ~~使用 OpenViking 为 Agent 提供仓库的渐进式上下文、持久化记忆~~
         - 需要挂载服务，背离了本项目当前快速交付的需要，清除
         - 工具不是越多越好，得精心筛选适配项目的

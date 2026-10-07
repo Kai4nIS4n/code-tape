@@ -17,6 +17,7 @@ permissions:
 jobs:
   guard:
     if: >
+      github.repository == 'ceilf6/code-tape' &&
       github.actor != 'dependabot[bot]' &&
       (
         (
