@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Link, Navigate, useParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import {
   Check,
   CircleDot,
@@ -166,6 +166,21 @@ function useCandidateInterviewRoomSession({
   onEventBusReady: (bus: RecorderEventBusSubscription) => (() => void) | void;
   endInterview: () => void;
 } {
+  const navigate = useNavigate();
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
+  const createdRoomIdRef = useRef<string | null>(null);
+  const [roomRoute, setRoomRoute] = useState({ pathId: routeRoomId, requestId: routeRoomId });
+  if (roomRoute.pathId !== routeRoomId) {
+    // Canonicalizing a newly created room must not tear down its live session.
+    setRoomRoute({
+      pathId: routeRoomId,
+      requestId: roomRoute.pathId === null && routeRoomId === createdRoomIdRef.current
+        ? roomRoute.requestId
+        : routeRoomId,
+    });
+  }
+  const requestRoomId = roomRoute.requestId;
   const [session, setSession] = useState<{
     roomId: string | null;
     roomState: CandidateInterviewRoomState;
@@ -311,8 +326,9 @@ function useCandidateInterviewRoomSession({
     });
     setMediaState(EMPTY_CANDIDATE_MEDIA_STATE);
 
+    if (!requestRoomId) createdRoomIdRef.current = null;
     if (!roomCreationRef.current || roomCreationRef.current.roomClient !== roomClient) {
-      roomCreationRef.current = { roomClient, request: routeRoomId ? roomClient.getRoom(routeRoomId, "").then((result) => result.ok ? { ok: true as const, value: { ...result.value, joinCode: result.value.joinCode ?? "" } } : result) : roomClient.createRoom() };
+      roomCreationRef.current = { roomClient, request: requestRoomId ? roomClient.getRoom(requestRoomId, "").then((result) => result.ok ? { ok: true as const, value: { ...result.value, joinCode: result.value.joinCode ?? "" } } : result) : roomClient.createRoom() };
     }
     const roomRequest = roomCreationRef.current.request;
 
@@ -609,6 +625,11 @@ function useCandidateInterviewRoomSession({
         },
       });
 
+      if (!requestRoomId) {
+        createdRoomIdRef.current = room.roomId;
+        navigateRef.current(`/interview/candidate/${encodeURIComponent(room.roomId)}`, { replace: true });
+      }
+
       if (!openMediaSession()) return;
 
       signalingClient = createSignalingClient({
@@ -680,7 +701,7 @@ function useCandidateInterviewRoomSession({
     createSignalingClient,
     refreshRealtimePublisher,
     roomClient,
-    routeRoomId,
+    requestRoomId,
     stopRealtimePublisher,
   ]);
 

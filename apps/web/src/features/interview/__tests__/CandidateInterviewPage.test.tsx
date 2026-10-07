@@ -103,6 +103,17 @@ describe("CandidateInterviewPage", () => {
     vi.unstubAllGlobals();
   });
 
+  it("canonicalizes a created room URL without recreating or reconnecting its current session", async () => {
+    const roomClient = makeRoomClient();
+    const signaling = makeSignalingFactory();
+    const view = renderCandidatePage({ initialEntry: "/interview/candidate", roomClient, createSignalingClient: signaling.create });
+    await waitFor(() => expect(view.router.state.location.pathname).toBe("/interview/candidate/room-created"));
+    expect(roomClient.createRoom).toHaveBeenCalledTimes(1);
+    expect(roomClient.getRoom).not.toHaveBeenCalled();
+    expect(signaling.create).toHaveBeenCalledTimes(1);
+    expect(signaling.client.close).not.toHaveBeenCalled();
+  });
+
   it("creates a room and connects candidate signaling from the candidate entry route", async () => {
     const roomClient = makeRoomClient({
       createRoom: vi.fn().mockResolvedValue({
@@ -1682,7 +1693,7 @@ function renderCandidatePage({
       </TooltipProvider>
     </ThemeProvider>
   );
-  return render(strict ? <StrictMode>{tree}</StrictMode> : tree);
+  return { ...render(strict ? <StrictMode>{tree}</StrictMode> : tree), router };
 }
 
 function renderCandidateView(props: ComponentProps<typeof CandidateInterviewView>) {
