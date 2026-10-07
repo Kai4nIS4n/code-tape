@@ -21,7 +21,12 @@ export type SubtitleCodeAnchor = {
   eventSeq: number;
   documentId: string;
   contentHash: string;
-  range?: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number };
+  range?: {
+    startLineNumber: number;
+    startColumn: number;
+    endLineNumber: number;
+    endColumn: number;
+  };
   source: "recorded-selection" | "recorded-cursor" | "manual";
 };
 
@@ -51,6 +56,7 @@ export type SubtitleCorrectionResult = {
     startMs: number;
     endMs?: number;
   }>;
+  validationWarnings?: SubtitleCorrectionWarning[];
 };
 
 export type SubtitlePostProcessorContext = {
@@ -117,5 +123,9 @@ export type SubtitleStore = {
   remove(recordingId: string): Promise<void>;
   loadAsset?(recordingId: string): Promise<SubtitleAsset | null>;
   /** Compare-and-swap prevents delayed model results overwriting a newer edit. */
-  saveAsset?(asset: SubtitleAsset, expectedRevision: number, signal?: AbortSignal): Promise<boolean>;
+  saveAsset?(
+    asset: SubtitleAsset,
+    expectedRevision: number,
+    signal?: AbortSignal,
+  ): Promise<boolean>;
 };

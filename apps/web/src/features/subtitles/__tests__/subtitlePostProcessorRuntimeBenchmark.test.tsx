@@ -1,9 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  DEFAULT_SUBTITLE_POSTPROCESS_TIMEOUT_MS,
-  SubtitlePanel,
-} from "../SubtitlePanel";
+import { DEFAULT_SUBTITLE_POSTPROCESS_TIMEOUT_MS, SubtitlePanel } from "../SubtitlePanel";
 import type {
   SubtitleChapter,
   SubtitlePostProcessor,
@@ -134,6 +131,7 @@ describe("subtitle postprocessor runtime benchmark", () => {
     );
 
     await waitFor(() => expect(screen.getByText("use state hook")).toBeInTheDocument());
+    fireEvent.pointerEnter(screen.getByRole("region", { name: "字幕" }));
     await waitFor(() => expect(postProcessor.warmUp).toHaveBeenCalled());
     await waitFor(() => expect(warmUpEndedAt).toBeGreaterThanOrEqual(warmUpStartedAt));
 

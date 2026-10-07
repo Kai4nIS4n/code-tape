@@ -24,6 +24,7 @@ import {
   type RemoteInterviewConnectionState,
 } from "../RemoteInterviewWorkbenchPage";
 import type { RemoteInterviewWorkbenchState } from "../remoteInterviewWorkbench";
+import type { DebugLogOptions } from "@/shared/debugLog";
 
 const codeEditorMock = vi.hoisted(() => ({
   calls: [] as CodeEditorProps[],
@@ -267,32 +268,18 @@ describe("RemoteInterviewWorkbenchPage", () => {
       });
     } finally {
       if (originalSrcObjectDescriptor) {
-        Object.defineProperty(
-          HTMLVideoElement.prototype,
-          "srcObject",
-          originalSrcObjectDescriptor,
-        );
+        Object.defineProperty(HTMLVideoElement.prototype, "srcObject", originalSrcObjectDescriptor);
       } else {
         Reflect.deleteProperty(HTMLVideoElement.prototype, "srcObject");
       }
     }
   });
 
-  it("registers the interviewer workbench route", () => {
-    const router = createMemoryRouter(appRoutes, {
-      initialEntries: ["/interview/interviewer/room-route"],
-    });
-
-    render(
-      <ThemeProvider>
-        <TooltipProvider>
-          <RouterProvider router={router} />
-        </TooltipProvider>
-      </ThemeProvider>,
+  it("registers the lazily loaded interviewer workbench route", () => {
+    const interviewer = appRoutes[0].children?.find(
+      (route) => route.path === "interview/interviewer/:roomId",
     );
-
-    expect(screen.getByRole("heading", { name: "面试官工作台" })).toBeInTheDocument();
-    expect(screen.getByText("room-route")).toBeInTheDocument();
+    expect(interviewer?.lazy).toBeTypeOf("function");
   });
 
   it("applies recording-event messages from the events DataChannel to the read-only workbench", async () => {
@@ -302,9 +289,7 @@ describe("RemoteInterviewWorkbenchPage", () => {
         {
           path: "/interview/interviewer/:roomId",
           element: (
-            <RemoteInterviewWorkbenchPage
-              deps={{ createMediaSession: () => media.session }}
-            />
+            <RemoteInterviewWorkbenchPage deps={{ createMediaSession: () => media.session }} />
           ),
         },
       ],
@@ -327,7 +312,9 @@ describe("RemoteInterviewWorkbenchPage", () => {
     });
 
     act(() => {
-      channel.emit(JSON.stringify(recordingMessage(contentEvent(1, "const fromCandidate = true;"))));
+      channel.emit(
+        JSON.stringify(recordingMessage(contentEvent(1, "const fromCandidate = true;"))),
+      );
     });
 
     await waitFor(() => {
@@ -346,9 +333,7 @@ describe("RemoteInterviewWorkbenchPage", () => {
         {
           path: "/interview/interviewer/:roomId",
           element: (
-            <RemoteInterviewWorkbenchPage
-              deps={{ createMediaSession: () => media.session }}
-            />
+            <RemoteInterviewWorkbenchPage deps={{ createMediaSession: () => media.session }} />
           ),
         },
       ],
@@ -383,9 +368,7 @@ describe("RemoteInterviewWorkbenchPage", () => {
         {
           path: "/interview/interviewer/:roomId",
           element: (
-            <RemoteInterviewWorkbenchPage
-              deps={{ createMediaSession: () => media.session }}
-            />
+            <RemoteInterviewWorkbenchPage deps={{ createMediaSession: () => media.session }} />
           ),
         },
       ],
@@ -427,11 +410,7 @@ describe("RemoteInterviewWorkbenchPage", () => {
       [
         {
           path: "/interview/interviewer/:roomId",
-          element: (
-            <RemoteInterviewWorkbenchPage
-              deps={{ createMediaSession }}
-            />
-          ),
+          element: <RemoteInterviewWorkbenchPage deps={{ createMediaSession }} />,
         },
       ],
       {
@@ -571,9 +550,9 @@ describe("RemoteInterviewWorkbenchPage interviewer signaling", () => {
       expect(media.session.createAnswer).toHaveBeenCalledTimes(1);
       expect(signaling.client.sendAnswer).toHaveBeenCalledWith("interviewer-answer-sdp");
     });
-    expect(
-      vi.mocked(media.session.setRemoteDescription).mock.invocationCallOrder[0],
-    ).toBeLessThan(vi.mocked(media.session.createAnswer).mock.invocationCallOrder[0]);
+    expect(vi.mocked(media.session.setRemoteDescription).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(media.session.createAnswer).mock.invocationCallOrder[0],
+    );
 
     act(() => {
       media.emitState({
@@ -656,6 +635,7 @@ describe("RemoteInterviewWorkbenchPage interviewer signaling", () => {
   });
 
   it("sends a snapshot-request over the events channel when a seq gap appears", async () => {
+    const debugSink = vi.fn();
     const roomClient = makeRoomClient();
     const signaling = makeSignalingFactory();
     const media = makeInterviewerMediaSessionFactory();
@@ -665,7 +645,9 @@ describe("RemoteInterviewWorkbenchPage interviewer signaling", () => {
       roomClient,
       createSignalingClient: signaling.create,
       createMediaSession: media.create,
+      debug: { enabled: true, sink: debugSink },
     });
+
     await waitFor(() => {
       expect(signaling.create).toHaveBeenCalledTimes(1);
     });
@@ -691,6 +673,15 @@ describe("RemoteInterviewWorkbenchPage interviewer signaling", () => {
       });
     });
 
+    expect(debugSink).toHaveBeenCalledWith({
+      event: "observer-snapshot-request",
+      outcome: "send-called",
+      roomId: "room-live",
+      recordingSessionId: "room-live",
+      expectedSeq: 1,
+      lastAppliedSeq: 0,
+    });
+    expect(JSON.stringify(debugSink.mock.calls)).not.toContain("const gapped");
     // The same unchanged gap must not trigger a duplicate request.
     act(() => {
       channel.emit(JSON.stringify(recordingMessage(contentEvent(3, "const stillGapped = true;"))));
@@ -787,7 +778,7 @@ describe("RemoteInterviewWorkbenchPage interviewer signaling", () => {
     expect(signaling.client.sendAnswer).not.toHaveBeenCalled();
   });
 
-  it("surfaces a failed connection and skips the answer when media permission is denied", async () => {
+  it("answers in receive-only mode when local media permission is denied", async () => {
     const roomClient = makeRoomClient();
     const signaling = makeSignalingFactory();
     const media = makeInterviewerMediaSessionFactory({
@@ -816,12 +807,12 @@ describe("RemoteInterviewWorkbenchPage interviewer signaling", () => {
       });
     });
 
-    expect(await screen.findByText("camera denied")).toBeInTheDocument();
-    expect(media.session.createAnswer).not.toHaveBeenCalled();
-    expect(signaling.client.sendAnswer).not.toHaveBeenCalled();
+    await waitFor(() => expect(signaling.client.sendAnswer).toHaveBeenCalledTimes(1));
+    expect(media.session.createAnswer).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("camera denied")).not.toBeInTheDocument();
   });
 
-  it("exposes an error and skips signaling when the join code is missing", async () => {
+  it("reopens an existing membership without an invitation query", async () => {
     const roomClient = makeRoomClient();
     const signaling = makeSignalingFactory();
     const media = makeInterviewerMediaSessionFactory();
@@ -833,9 +824,8 @@ describe("RemoteInterviewWorkbenchPage interviewer signaling", () => {
       createMediaSession: media.create,
     });
 
-    expect(await screen.findByText("缺少 joinCode，无法加入面试房间")).toBeInTheDocument();
-    expect(roomClient.getRoom).not.toHaveBeenCalled();
-    expect(signaling.create).not.toHaveBeenCalled();
+    await waitFor(() => expect(signaling.create).toHaveBeenCalledTimes(1));
+    expect(roomClient.getRoom).toHaveBeenCalledWith("room-live", "");
   });
 
   it("exposes an error when room validation fails", async () => {
@@ -1001,9 +991,7 @@ describe("RemoteInterviewWorkbenchPage interviewer signaling", () => {
       createMediaSession: media.create,
     });
 
-    expect(
-      await screen.findByText("joinCode 格式非法，无法加入面试房间"),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("joinCode 格式非法，无法加入面试房间")).toBeInTheDocument();
     expect(roomClient.getRoom).not.toHaveBeenCalled();
     expect(signaling.create).not.toHaveBeenCalled();
   });
@@ -1318,11 +1306,13 @@ function renderInterviewerPage({
   roomClient,
   createSignalingClient,
   createMediaSession,
+  debug,
 }: {
   initialEntry: string;
   roomClient: InterviewRoomClient;
   createSignalingClient: (options: InterviewSignalingClientOptions) => InterviewSignalingClient;
   createMediaSession: () => InterviewMediaSession;
+  debug?: DebugLogOptions;
 }) {
   const router = createMemoryRouter(
     [
@@ -1330,7 +1320,7 @@ function renderInterviewerPage({
         path: "/interview/interviewer/:roomId",
         element: (
           <RemoteInterviewWorkbenchPage
-            deps={{ roomClient, createSignalingClient, createMediaSession }}
+            deps={{ roomClient, createSignalingClient, createMediaSession, debug }}
           />
         ),
       },

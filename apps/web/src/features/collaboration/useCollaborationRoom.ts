@@ -1,19 +1,23 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { authClient } from "@/features/auth/authClient";
 import { CollaborationSession } from "./collaborationSession";
+import { featureFlags } from "@/shared/featureFlags";
 
 export function useCollaborationRoom(roomId: string | null, joinCode?: string | null) {
   const auth = useSyncExternalStore(authClient.subscribe, authClient.getSnapshot, authClient.getSnapshot);
   const [session, setSession] = useState<CollaborationSession | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [role, setRole] = useState<"candidate" | "interviewer" | null>(null);
+  const userId = auth.user?.id;
+  const displayName = auth.user?.displayName ?? "";
+  const authEpoch = authClient.epoch;
   useEffect(() => {
-    if (!roomId || !auth.user) return;
+    if (!roomId || !userId) return;
     let cancelled = false;
     let current: CollaborationSession | null = null;
-    const accountEpoch = authClient.epoch;
+    const accountEpoch = authEpoch;
     const unsubscribeAuth = authClient.subscribe(() => {
-      if (authClient.epoch !== accountEpoch || authClient.getSnapshot().user?.id !== auth.user?.id) current?.invalidate();
+      if (authClient.epoch !== accountEpoch || authClient.getSnapshot().user?.id !== userId) current?.invalidate();
     });
     void (async () => {
       try {
@@ -31,7 +35,8 @@ export function useCollaborationRoom(roomId: string | null, joinCode?: string | 
         if (cancelled || accountEpoch !== authClient.epoch) return;
         if (result.role !== "candidate" && result.role !== "interviewer") throw new Error("房间成员身份无效。");
         setRole(result.role);
-        current = new CollaborationSession({ userId: auth.user!.id, displayName: auth.user!.displayName, roomId, epoch: epoch!, request: authClient.fetch });
+        if (!featureFlags.collaboration) { setError(null); return; }
+        current = new CollaborationSession({ userId, displayName, role: result.role, roomId, epoch: epoch!, request: authClient.fetch });
         setSession(current);
         setError(null);
         await current.start();
@@ -40,6 +45,6 @@ export function useCollaborationRoom(roomId: string | null, joinCode?: string | 
       }
     })();
     return () => { cancelled = true; unsubscribeAuth(); current?.destroy(); setSession(null); setRole(null); };
-  }, [roomId, joinCode, auth.user?.id]);
+  }, [roomId, joinCode, userId, displayName, authEpoch]);
   return { session, error, role };
 }

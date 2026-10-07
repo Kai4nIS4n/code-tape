@@ -135,6 +135,8 @@ export type CloudPlaybackDescriptor = {
   title: string;
   durationMs: number;
   schemaVersion: RecordingSchemaVersion;
+  hasAudio: boolean;
+  hasCamera: boolean;
   manifestUrl: string;
   metaUrl: string;
   eventsUrl: string;

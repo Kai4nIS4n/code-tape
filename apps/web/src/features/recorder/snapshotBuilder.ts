@@ -27,13 +27,16 @@ export type SnapshotBuilder = {
   reset(): void;
 };
 
-export function createSnapshotBuilder(): SnapshotBuilder {
+export function createSnapshotBuilder(options: { beforeCapture?: () => void } = {}): SnapshotBuilder {
   let state: ReplayStableState | null = null;
   let lastEvent: RecordingEvent | null = null;
   let lastSnapshotTimestampMs = -Infinity;
   let lastSnapshotSeq = 0;
   let stableEventsSinceSnapshot = 0;
   const snapshots: RecordingSnapshot[] = [];
+  let capturePending = false;
+  let preparingCapture = false;
+  let generation = 0;
 
   const capture = (event: RecordingEvent) => {
     if (!state || lastSnapshotSeq === event.seq) return;
@@ -52,13 +55,33 @@ export function createSnapshotBuilder(): SnapshotBuilder {
       ...snapshot,
       state: cloneReplayStableState(snapshot.state),
     }));
+  const captureConsistentState = () => {
+    if (preparingCapture) return;
+    capturePending = false;
+    preparingCapture = true;
+    try {
+      options.beforeCapture?.();
+      if (lastEvent) capture(lastEvent);
+    } finally { preparingCapture = false; }
+  };
+  const requestCapture = (event: RecordingEvent) => {
+    if (!options.beforeCapture) { capture(event); return; }
+    if (capturePending || preparingCapture) return;
+    capturePending = true;
+    const requestedGeneration = generation;
+    // Wait until every EventBus subscriber received the triggering event.
+    // Flushing inside apply() would deliver seq N+1 before N to later listeners.
+    queueMicrotask(() => {
+      if (capturePending && requestedGeneration === generation) captureConsistentState();
+    });
+  };
 
   return {
     apply(event) {
       lastEvent = event;
       if (event.type === "record-start") {
         state = buildInitialReplayStateFromRecordStart(event.payload);
-        capture(event);
+        requestCapture(event);
         return;
       }
       if (!state) return;
@@ -73,17 +96,20 @@ export function createSnapshotBuilder(): SnapshotBuilder {
         stableEventsSinceSnapshot >= STABLE_EVENTS_PER_SNAPSHOT ||
         SEMANTIC_SNAPSHOT_TYPES.has(event.type)
       ) {
-        capture(event);
+        requestCapture(event);
       }
     },
     getSnapshots() {
       return getSnapshots();
     },
     finalize() {
-      if (lastEvent) capture(lastEvent);
+      if (options.beforeCapture) captureConsistentState();
+      else if (lastEvent) capture(lastEvent);
       return getSnapshots();
     },
     reset() {
+      generation += 1;
+      capturePending = false;
       state = null;
       lastEvent = null;
       lastSnapshotTimestampMs = -Infinity;

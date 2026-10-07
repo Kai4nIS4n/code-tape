@@ -40,6 +40,7 @@ import type {
   UploadTarget,
   CloudApiError,
   RecordingAssetKind,
+  CloudShareLink,
 } from "./types";
 
 // ─────────────────────────────────────────────────────────────
@@ -69,10 +70,23 @@ export function createCloudRecordingRepository(
 ): CloudRecordingRepository {
   const apiBase = options.apiBase ?? DEFAULT_API_BASE;
   const account = options.auth ?? authClient;
-  const authorizedFetch = (
+  const responseEpochs = new WeakMap<Response, number>();
+  const authorizedFetch = async (
     url: string,
     init: RequestInit & { headers?: Record<string, string> } = {},
-  ): Promise<Response> => account.fetch(url, init);
+  ): Promise<Response> => {
+    const epoch = account.epoch;
+    const response = await account.fetch(url, init);
+    responseEpochs.set(response, epoch);
+    return response;
+  };
+  const handleJsonResponse = async <T>(response: Response): Promise<CloudResult<T>> => {
+    const result = await parseJsonResponse<T>(response);
+    const epoch = responseEpochs.get(response);
+    return epoch !== undefined && epoch !== account.epoch
+      ? { ok: false, error: { code: "unauthorized", message: "账号状态已更新，请重新操作" } }
+      : result;
+  };
 
   const repo: CloudRecordingRepository = {
     // ── 创建上传会话 ──────────────────────────────────────
@@ -107,13 +121,19 @@ export function createCloudRecordingRepository(
       });
 
       try {
-        await putBlobWithProgress(target.url, blob, target.headers, (bytesUploaded) => {
-          onProgress?.({
-            bytesUploaded,
-            totalBytes,
-            currentAssetKind: target.kind,
-          });
-        }, timeoutMs);
+        await putBlobWithProgress(
+          target.url,
+          blob,
+          target.headers,
+          (bytesUploaded) => {
+            onProgress?.({
+              bytesUploaded,
+              totalBytes,
+              currentAssetKind: target.kind,
+            });
+          },
+          timeoutMs,
+        );
         return { ok: true, value: undefined };
       } catch (err) {
         return {
@@ -164,12 +184,9 @@ export function createCloudRecordingRepository(
     async list(input: ListRecordingsInput = {}): Promise<CloudResult<ListRecordingsResponse>> {
       const query = buildListQuery(input);
       try {
-        const response = await authorizedFetch(
-          `${apiBase}/api/recordings${query}`,
-          {
-            method: "GET",
-          },
-        );
+        const response = await authorizedFetch(`${apiBase}/api/recordings${query}`, {
+          method: "GET",
+        });
         return handleJsonResponse<ListRecordingsResponse>(response);
       } catch (err) {
         return { ok: false, error: networkError("list recordings failed", err) };
@@ -215,15 +232,39 @@ export function createCloudRecordingRepository(
       }
     },
 
+    async listShareLinks(recordingId: string): Promise<CloudResult<{ items: CloudShareLink[] }>> {
+      try {
+        return handleJsonResponse(
+          await authorizedFetch(
+            `${apiBase}/api/recordings/${encodeURIComponent(recordingId)}/share-links`,
+            { method: "GET" },
+          ),
+        );
+      } catch (error) {
+        return { ok: false, error: networkError("list share links failed", error) };
+      }
+    },
+    async revokeShareLink(recordingId: string, shareId: string): Promise<CloudResult<void>> {
+      try {
+        return handleVoidResponse(
+          await authorizedFetch(
+            `${apiBase}/api/recordings/${encodeURIComponent(recordingId)}/share-links/${encodeURIComponent(shareId)}`,
+            { method: "DELETE" },
+          ),
+        );
+      } catch (error) {
+        return { ok: false, error: networkError("revoke share link failed", error) };
+      }
+    },
+
     // ── 通过分享 token 获取播放描述 ───────────────────────
     async getSharedPlaybackDescriptor(
       token: string,
     ): Promise<CloudResult<CloudPlaybackDescriptor>> {
       try {
-        const response = await fetch(
-          `${apiBase}/api/share/${encodeURIComponent(token)}/playback`,
-          { method: "GET" },
-        );
+        const response = await fetch(`${apiBase}/api/share/${encodeURIComponent(token)}/playback`, {
+          method: "GET",
+        });
         return handleJsonResponse<CloudPlaybackDescriptor>(response);
       } catch (err) {
         return { ok: false, error: networkError("get shared playback descriptor failed", err) };
@@ -268,8 +309,17 @@ export function createCloudRecordingRepository(
     async uploadPackage(
       pkg: RecordingPackageV1,
       blobs: { media?: Blob; thumbnail?: Blob },
-      options?: { idempotencyKey?: string; onProgress?: (progress: UploadProgress) => void; timeoutMs?: number },
+      options?: {
+        idempotencyKey?: string;
+        onProgress?: (progress: UploadProgress) => void;
+        timeoutMs?: number;
+      },
     ): Promise<CloudResult<{ recordingId: string; status: string }>> {
+      const uploadEpoch = account.epoch;
+      const accountChanged = (): CloudResult<never> => ({
+        ok: false,
+        error: { code: "unauthorized", message: "账号已切换，上传已暂停；请在目标账号下重新上传" },
+      });
       // 0. 校验：含媒体录制必须提供 media blob，否则会创建与本地包不一致的云端记录
       if (pkg.media && !blobs.media) {
         return {
@@ -299,6 +349,7 @@ export function createCloudRecordingRepository(
       }
 
       // 2. 创建上传会话
+      if (account.epoch !== uploadEpoch) return accountChanged();
       const sessionInput: CreateUploadSessionRequest = {
         idempotencyKey,
         localPackageId: pkg.manifest.packageId,
@@ -316,6 +367,7 @@ export function createCloudRecordingRepository(
         })),
       };
       const sessionResult = await repo.createUploadSession(sessionInput);
+      if (account.epoch !== uploadEpoch) return accountChanged();
       if (!sessionResult.ok) return sessionResult;
       const { sessionId, recordingId, uploadTargets } = sessionResult.value;
 
@@ -331,6 +383,7 @@ export function createCloudRecordingRepository(
       }
 
       for (const target of uploadTargets) {
+        if (account.epoch !== uploadEpoch) return accountChanged();
         const blob = blobByKind.get(target.kind);
         if (!blob) {
           return {
@@ -343,14 +396,20 @@ export function createCloudRecordingRepository(
         }
 
         const completedBytesBeforeAsset = bytesUploaded;
-        const assetResult = await repo.uploadAsset(target, blob, (p) => {
-          onProgress?.({
-            bytesUploaded: completedBytesBeforeAsset + p.bytesUploaded,
-            totalBytes,
-            currentAssetKind: p.currentAssetKind,
-          });
-        }, options?.timeoutMs);
+        const assetResult = await repo.uploadAsset(
+          target,
+          blob,
+          (p) => {
+            onProgress?.({
+              bytesUploaded: completedBytesBeforeAsset + p.bytesUploaded,
+              totalBytes,
+              currentAssetKind: p.currentAssetKind,
+            });
+          },
+          options?.timeoutMs,
+        );
         if (!assetResult.ok) return assetResult;
+        if (account.epoch !== uploadEpoch) return accountChanged();
 
         // 资产上传完成，累加进度
         const def = assetDefs.find((a) => a.kind === target.kind);
@@ -364,6 +423,7 @@ export function createCloudRecordingRepository(
       }
 
       // 4. complete
+      if (account.epoch !== uploadEpoch) return accountChanged();
       const completeResult = await repo.completeUpload(sessionId, { uploadedAssets });
       if (!completeResult.ok) return completeResult;
 
@@ -440,7 +500,7 @@ function buildListQuery(input: ListRecordingsInput): string {
  * 解析 API JSON 响应，区分成功与错误。
  * 后端错误响应格式：{ error: { code, message, requestId, details? } }
  */
-async function handleJsonResponse<T>(response: Response): Promise<CloudResult<T>> {
+async function parseJsonResponse<T>(response: Response): Promise<CloudResult<T>> {
   if (!response.ok) {
     return parseApiError(response);
   }
@@ -469,7 +529,9 @@ async function handleVoidResponse(response: Response): Promise<CloudResult<void>
 async function parseApiError<T>(response: Response): Promise<CloudResult<T>> {
   const requestId = response.headers.get("x-request-id") ?? undefined;
   try {
-    const body = (await response.json()) as { error?: { code?: string; message?: string; details?: unknown } };
+    const body = (await response.json()) as {
+      error?: { code?: string; message?: string; details?: unknown };
+    };
     if (body?.error && typeof body.error.code === "string") {
       return {
         ok: false,

@@ -46,7 +46,11 @@ export function saveExternalLlmConfig(
     const value = normalizeConfigStrict(config);
     selected.setItem(SUBTITLE_LLM_CONFIG_STORAGE_KEY, JSON.stringify(value));
     if (!storage) {
-      if (options.rememberKey) safeStorage("local")?.setItem(SUBTITLE_LLM_CONFIG_STORAGE_KEY, JSON.stringify({ ...value, rememberKey: true }));
+      if (options.rememberKey)
+        safeStorage("local")?.setItem(
+          SUBTITLE_LLM_CONFIG_STORAGE_KEY,
+          JSON.stringify({ ...value, rememberKey: true }),
+        );
       else safeStorage("local")?.removeItem(SUBTITLE_LLM_CONFIG_STORAGE_KEY);
     }
   } catch {
@@ -55,18 +59,21 @@ export function saveExternalLlmConfig(
   }
 }
 
-export function clearExternalLlmConfig(
-  storage?: Pick<Storage, "removeItem">,
-): void {
+export function clearExternalLlmConfig(storage?: Pick<Storage, "removeItem">): void {
   try {
     if (storage) storage.removeItem(SUBTITLE_LLM_CONFIG_STORAGE_KEY);
-    else { safeStorage("session")?.removeItem(SUBTITLE_LLM_CONFIG_STORAGE_KEY); safeStorage("local")?.removeItem(SUBTITLE_LLM_CONFIG_STORAGE_KEY); }
+    else {
+      safeStorage("session")?.removeItem(SUBTITLE_LLM_CONFIG_STORAGE_KEY);
+      safeStorage("local")?.removeItem(SUBTITLE_LLM_CONFIG_STORAGE_KEY);
+    }
   } catch {
     // ignore
   }
 }
 
-export function isExternalLlmConfigured(config: ExternalLlmConfig | null): config is ExternalLlmConfig {
+export function isExternalLlmConfigured(
+  config: ExternalLlmConfig | null,
+): config is ExternalLlmConfig {
   if (!config) return false;
   return (
     VALID_PROVIDERS.has(config.provider) &&
@@ -100,7 +107,11 @@ function normalizeConfigStrict(config: ExternalLlmConfig): ExternalLlmConfig {
 
 function safeStorage(kind: "local" | "session"): Storage | undefined {
   try {
-    return typeof globalThis !== "undefined" ? kind === "session" ? globalThis.sessionStorage : globalThis.localStorage : undefined;
+    return typeof globalThis !== "undefined"
+      ? kind === "session"
+        ? globalThis.sessionStorage
+        : globalThis.localStorage
+      : undefined;
   } catch {
     return undefined;
   }

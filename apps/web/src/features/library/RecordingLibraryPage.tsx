@@ -4,7 +4,8 @@ import { Share2 } from "lucide-react";
 import { downloadBlob, safeFilenameStem } from "./recordingDownload";
 import { createRecordingStore } from "./recordingStore";
 import { createCloudRecordingRepository } from "@/features/cloud/cloudRecordingRepository";
-import type { CloudApiError, CloudRecordingListItem } from "@/features/cloud/types";
+import type { CloudApiError, CloudRecordingListItem, CloudShareLink } from "@/features/cloud/types";
+import { useAuth } from "@/features/auth/useAuth";
 import { formatDurationMs } from "@/shared/time/duration";
 import { IconButton, Popover, Tooltip } from "@/shared/ui";
 import type { PackageLoadError, RecordingListItem, SaveResult } from "@/shared/recording-schema";
@@ -22,6 +23,9 @@ type LibraryItem = RecordingListItem | CloudRecordingListItem;
  */
 export function RecordingLibraryPage() {
   const navigate = useNavigate();
+  const auth = useAuth();
+  const currentAuthEpoch = useRef(auth.epoch);
+  currentAuthEpoch.current = auth.epoch;
   const localRepository = useMemo(() => createRecordingStore(), []);
   const cloudRepository = useMemo(() => createCloudRecordingRepository(), []);
   const [view, setView] = useState<"local" | "cloud">("local");
@@ -29,7 +33,10 @@ export function RecordingLibraryPage() {
   const [cloudItems, setCloudItems] = useState<CloudRecordingListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [feedbackDialog, setFeedbackDialog] = useState<{ tone: "success" | "error"; message: string } | null>(null);
+  const [feedbackDialog, setFeedbackDialog] = useState<{
+    tone: "success" | "error";
+    message: string;
+  } | null>(null);
   const [pendingRenameId, setPendingRenameId] = useState<string | null>(null);
   const [pendingRenameValue, setPendingRenameValue] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
@@ -39,8 +46,26 @@ export function RecordingLibraryPage() {
   const [importing, setImporting] = useState(false);
   const [quota, setQuota] = useState<{ usageBytes: number; quotaBytes: number } | null>(null);
   const [localThumbnailUrls, setLocalThumbnailUrls] = useState<Record<string, string>>({});
-  const [uploadProgress, setUploadProgress] = useState<{ recordingId: string; message: string } | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<{
+    recordingId: string;
+    message: string;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [shareManager, setShareManager] = useState<{
+    recordingId: string;
+    items: CloudShareLink[];
+  } | null>(null);
+  const previousAuthEpoch = useRef(auth.epoch);
+  useEffect(() => {
+    if (previousAuthEpoch.current === auth.epoch) return;
+    previousAuthEpoch.current = auth.epoch;
+    setCloudItems([]);
+    setShareManager(null);
+    setUploadProgress(null);
+    setBusyKey(null);
+    setFeedbackDialog(null);
+    setView("local");
+  }, [auth.epoch]);
 
   const refreshLocal = useCallback(async () => {
     setLoading(true);
@@ -64,28 +89,37 @@ export function RecordingLibraryPage() {
   }, [localRepository]);
 
   const refreshCloud = useCallback(async () => {
+    const epoch = currentAuthEpoch.current;
+    if (!auth.user) {
+      setCloudItems([]);
+      setLoading(false);
+      setLoadError("请登录后查看云端录制");
+      return;
+    }
     setLoading(true);
     setLoadError(null);
     let loadError: string | null = null;
     try {
       const result = await cloudRepository.list();
+      if (epoch !== currentAuthEpoch.current) return;
       if (!result.ok) {
         throw new Error(formatCloudError(result.error));
       }
       setCloudItems(result.value.items);
       setLoadError(null);
     } catch (err) {
+      if (epoch !== currentAuthEpoch.current) return;
       loadError = `读取云端失败：${(err as Error).message}`;
       setLoadError(loadError);
     } finally {
-      setLoading(false);
+      if (epoch === currentAuthEpoch.current) setLoading(false);
     }
     if (loadError) {
       setTimeout(() => {
         setFeedbackDialog({ tone: "error", message: loadError as string });
       }, 0);
     }
-  }, [cloudRepository]);
+  }, [auth.user, cloudRepository]);
 
   const refresh = useCallback(async () => {
     if (view === "cloud") {
@@ -137,7 +171,9 @@ export function RecordingLibraryPage() {
         }
       }),
     ).then((entries) => {
-      const nextUrls = Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => entry !== null));
+      const nextUrls = Object.fromEntries(
+        entries.filter((entry): entry is readonly [string, string] => entry !== null),
+      );
       if (cancelled) {
         Object.values(nextUrls).forEach((url) => URL.revokeObjectURL(url));
         return;
@@ -224,16 +260,19 @@ export function RecordingLibraryPage() {
   };
 
   const handleShare = async (item: CloudRecordingListItem) => {
+    const epoch = currentAuthEpoch.current;
     setBusyKey(`share-${item.id}`);
     try {
       const result = await cloudRepository.createShareLink(item.id, {});
+      if (epoch !== currentAuthEpoch.current) return;
       if (!result.ok) throw new Error(formatCloudError(result.error));
       await writeClipboard(buildAbsoluteShareUrl(result.value.url));
+      if (epoch !== currentAuthEpoch.current) return;
       openFeedbackDialog("success", "分享链接已复制。");
     } catch (err) {
-      openFeedbackDialog("error", `分享失败：${(err as Error).message}`);
+      if (epoch === currentAuthEpoch.current) openFeedbackDialog("error", `分享失败：${(err as Error).message}`);
     } finally {
-      setBusyKey(null);
+      if (epoch === currentAuthEpoch.current) setBusyKey(null);
     }
   };
 
@@ -259,32 +298,37 @@ export function RecordingLibraryPage() {
   };
 
   const handleUpload = async (item: RecordingListItem) => {
+    if (!auth.user) {
+      navigate("/login?next=%2F");
+      return;
+    }
+    const epoch = currentAuthEpoch.current;
     setBusyKey(`upload-${item.id}`);
     setUploadProgress({ recordingId: item.id, message: "准备上传…" });
     try {
       const loaded = await localRepository.load(item.id);
+      if (epoch !== currentAuthEpoch.current) return;
       if (!loaded.ok) {
         throw new Error(`本地录制包读取失败：${formatPackageLoadError(loaded.error)}`);
       }
       const thumbnail = item.thumbnailBlobId
         ? await localRepository.loadThumbnail(item.thumbnailBlobId).catch(() => null)
         : null;
+      if (epoch !== currentAuthEpoch.current) return;
       const blobs: { media?: Blob; thumbnail?: Blob } = {};
       if (loaded.mediaBlob) blobs.media = loaded.mediaBlob;
       if (thumbnail) blobs.thumbnail = thumbnail;
-      const upload = await cloudRepository.uploadPackage(
-        loaded.package,
-        blobs,
-        {
-          timeoutMs: 60_000,
+      const upload = await cloudRepository.uploadPackage(loaded.package, blobs, {
+        timeoutMs: 60_000,
           onProgress: (progress) => {
-            setUploadProgress({
-              recordingId: item.id,
-              message: formatUploadProgress(progress.bytesUploaded, progress.totalBytes),
-            });
-          },
+            if (epoch !== currentAuthEpoch.current) return;
+          setUploadProgress({
+            recordingId: item.id,
+            message: formatUploadProgress(progress.bytesUploaded, progress.totalBytes),
+          });
         },
-      );
+      });
+      if (epoch !== currentAuthEpoch.current) return;
       if (!upload.ok) throw new Error(formatCloudError(upload.error));
 
       setUploadProgress({ recordingId: item.id, message: "云端校验中…" });
@@ -292,6 +336,7 @@ export function RecordingLibraryPage() {
         intervalMs: 1_000,
         timeoutMs: 60_000,
       });
+      if (epoch !== currentAuthEpoch.current) return;
       if (!ready.ok) throw new Error(formatCloudError(ready.error));
       if (ready.value.recording.status === "failed") {
         throw new Error(
@@ -304,10 +349,49 @@ export function RecordingLibraryPage() {
       openFeedbackDialog("success", `已上传「${item.title}」。`);
       setView("cloud");
     } catch (err) {
-      openFeedbackDialog("error", `上传失败：${(err as Error).message}`);
+      if (epoch === currentAuthEpoch.current) openFeedbackDialog("error", `上传失败：${(err as Error).message}`);
     } finally {
-      setUploadProgress(null);
-      setBusyKey(null);
+      if (epoch === currentAuthEpoch.current) {
+        setUploadProgress(null);
+        setBusyKey(null);
+      }
+    }
+  };
+
+  const manageShares = async (item: CloudRecordingListItem) => {
+    const epoch = currentAuthEpoch.current;
+    const result = await cloudRepository.listShareLinks(item.id);
+    if (epoch !== currentAuthEpoch.current) return;
+    if (!result.ok) {
+      openFeedbackDialog("error", formatCloudError(result.error));
+      return;
+    }
+    setShareManager({ recordingId: item.id, items: result.value.items });
+  };
+
+  const revokeShare = async (id: string) => {
+    if (!shareManager) return;
+    const epoch = currentAuthEpoch.current;
+    const recordingId = shareManager.recordingId;
+    setBusyKey(`revoke-${id}`);
+    try {
+      const result = await cloudRepository.revokeShareLink(recordingId, id);
+      if (epoch !== currentAuthEpoch.current) return;
+      if (!result.ok) throw new Error(formatCloudError(result.error));
+      setShareManager((current) =>
+        current?.recordingId === recordingId
+          ? {
+              ...current,
+              items: current.items.map((item) =>
+                item.id === id ? { ...item, revokedAt: new Date().toISOString() } : item,
+              ),
+            }
+          : current,
+      );
+    } catch (error) {
+      openFeedbackDialog("error", error instanceof Error ? error.message : "撤销失败");
+    } finally {
+      if (epoch === currentAuthEpoch.current) setBusyKey(null);
     }
   };
 
@@ -403,7 +487,9 @@ export function RecordingLibraryPage() {
         </div>
       ) : showEmpty ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-md border border-dashed border-border bg-surface/60 p-12 text-center">
-          <p className="font-display text-lg">{view === "cloud" ? "还没有云端录制" : "还没有录制"}</p>
+          <p className="font-display text-lg">
+            {view === "cloud" ? "还没有云端录制" : "还没有录制"}
+          </p>
           <p className="max-w-sm text-sm text-muted">
             {view === "cloud"
               ? "从本地录制列表上传后，会在这里查看和播放云端录制。"
@@ -483,6 +569,16 @@ export function RecordingLibraryPage() {
                           disabled={busyKey !== null || importing}
                         />
                       ) : null}
+                      {view === "cloud" ? (
+                        <IconButton
+                          icon={<span aria-hidden>↗</span>}
+                          label="管理分享"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => void manageShares(item as CloudRecordingListItem)}
+                          disabled={busyKey !== null || importing}
+                        />
+                      ) : null}
                       <Popover
                         open={pendingRenameId === item.id}
                         onOpenChange={(open) => {
@@ -495,7 +591,7 @@ export function RecordingLibraryPage() {
                         align="end"
                         side="top"
                         width={300}
-                        trigger={(
+                        trigger={
                           <IconButton
                             icon={<span aria-hidden>✎</span>}
                             label="重命名"
@@ -503,7 +599,7 @@ export function RecordingLibraryPage() {
                             size="sm"
                             disabled={busyKey !== null || importing}
                           />
-                        )}
+                        }
                       >
                         <form
                           className="space-y-2"
@@ -572,7 +668,7 @@ export function RecordingLibraryPage() {
                         align="end"
                         side="top"
                         width={260}
-                        trigger={(
+                        trigger={
                           <IconButton
                             icon={<span aria-hidden>✕</span>}
                             label="删除"
@@ -580,7 +676,7 @@ export function RecordingLibraryPage() {
                             size="sm"
                             disabled={busyKey !== null || importing}
                           />
-                        )}
+                        }
                       >
                         <div className="space-y-2">
                           <p className="text-xs text-foreground">确认删除「{item.title}」？</p>
@@ -613,7 +709,9 @@ export function RecordingLibraryPage() {
                       </Popover>
                     </div>
                     {uploadProgress?.recordingId === item.id ? (
-                      <p className="mt-1 text-right text-[11px] text-muted">{uploadProgress.message}</p>
+                      <p className="mt-1 text-right text-[11px] text-muted">
+                        {uploadProgress.message}
+                      </p>
                     ) : null}
                   </td>
                 </tr>
@@ -631,6 +729,51 @@ export function RecordingLibraryPage() {
           >
             <p className="text-sm text-foreground">加载中…</p>
           </div>
+        </div>
+      ) : null}
+      {shareManager ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-background/60 p-4">
+          <section
+            role="dialog"
+            aria-label="管理分享"
+            aria-modal="true"
+            className="w-full max-w-lg rounded-lg border border-border bg-popover p-5 shadow-elevation-3"
+          >
+            <h2 className="font-display text-base font-semibold">管理分享</h2>
+            <p className="mt-2 text-xs text-muted">
+              撤销后，后续媒体、缩略图和录制数据请求将被拒绝。已经下载的内容无法收回。
+            </p>
+            <ul className="my-4 max-h-72 space-y-2 overflow-auto">
+              {shareManager.items.map((item) => (
+                <li
+                  key={item.id}
+                  className="flex items-center justify-between gap-3 rounded border border-border p-3 text-xs"
+                >
+                  <span>
+                    创建于 {formatCreatedAt(item.createdAt)}
+                    {item.expiresAt ? ` · 到期 ${formatCreatedAt(item.expiresAt)}` : " · 不限时"}
+                    {item.revokedAt ? " · 已撤销" : ""}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={!!item.revokedAt || busyKey !== null}
+                    onClick={() => void revokeShare(item.id)}
+                    className="rounded border border-border px-2 py-1 disabled:opacity-50"
+                  >
+                    撤销
+                  </button>
+                </li>
+              ))}
+            </ul>
+            {!shareManager.items.length && <p className="my-4 text-sm text-muted">尚无分享链接</p>}
+            <button
+              type="button"
+              onClick={() => setShareManager(null)}
+              className="rounded bg-primary px-3 py-2 text-sm text-primary-foreground"
+            >
+              关闭分享管理
+            </button>
+          </section>
         </div>
       ) : null}
       {feedbackDialog ? (
@@ -700,7 +843,8 @@ function EllipsisText({ text, align = "left", className = "" }: EllipsisTextProp
       setOverflowing(node.scrollWidth > node.clientWidth);
     };
     checkOverflow();
-    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(checkOverflow) : null;
+    const observer =
+      typeof ResizeObserver !== "undefined" ? new ResizeObserver(checkOverflow) : null;
     observer?.observe(node);
     window.addEventListener("resize", checkOverflow);
     return () => {
@@ -750,7 +894,8 @@ function EllipsisLink({ to, text, align = "left", className = "" }: EllipsisLink
     const node = ref.current;
     if (!node) return;
     checkOverflow();
-    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(checkOverflow) : null;
+    const observer =
+      typeof ResizeObserver !== "undefined" ? new ResizeObserver(checkOverflow) : null;
     observer?.observe(node);
     window.addEventListener("resize", checkOverflow);
     return () => {

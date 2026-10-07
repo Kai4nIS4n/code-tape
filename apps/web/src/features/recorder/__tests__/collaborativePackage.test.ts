@@ -1,0 +1,44 @@
+import { describe, expect, it } from "vitest";
+import * as Y from "yjs";
+import { createCollaborativeRecordingProducer } from "@/features/capture/collaborativeRecordingProducer";
+import { REMOTE_COLLABORATION_ORIGIN, type CollaborationSession } from "@/features/collaboration/collaborationSession";
+import { createEventBus } from "../eventBus";
+import { createRecordingClock } from "../recordingClock";
+import { createSnapshotBuilder } from "../snapshotBuilder";
+import { createPackageBuilder } from "../packageBuilder";
+import { buildRecordingZip } from "@/features/library/recordingArchive";
+import { createPackageLoader } from "@/features/player/packageLoader";
+import { createRecordingStore } from "@/features/library/recordingStore";
+import { buildFinalReplayStateFromPackage, RECORDING_LANGUAGES } from "@/shared/recording-schema";
+import type { RecordStartPayload } from "@/shared/recording-schema";
+
+describe("shared edits enter the existing recording archive", () => {
+  it("exports merged inactive HTML and replays it without changing the candidate's JS view", async () => {
+    const candidate = new Y.Doc(); const interviewer = new Y.Doc();
+    const getText = (language: string) => candidate.getText(`source:${language}`);
+    const session = { getText, getDocuments: () => Object.fromEntries(RECORDING_LANGUAGES.map((language) => [language, getText(language).toString()])) } as CollaborationSession;
+    const clock = createRecordingClock(); clock.start();
+    const bus = createEventBus({ clock });
+    const snapshots = createSnapshotBuilder(); bus.subscribe((event) => snapshots.apply(event));
+    const producer = createCollaborativeRecordingProducer({ session, clock, bus, getCurrentLanguage: () => "javascript" });
+    const payload: RecordStartPayload = { initialLanguage: "javascript", initialTheme: "dark", initialFontSize: 14, selectedAudioDeviceId: null, selectedCameraDeviceId: null, mediaCapability: { audio: "unsupported", camera: "unsupported", selectedAudioDeviceId: null, selectedCameraDeviceId: null } };
+    bus.emit({ type: "record-start", source: "recorder", track: "main", payload }); producer.start();
+    Y.applyUpdate(interviewer, Y.encodeStateAsUpdate(candidate));
+    interviewer.getText("source:html").insert(0, "<h1>Edited by interviewer</h1>");
+    Y.applyUpdate(candidate, Y.encodeStateAsUpdate(interviewer), REMOTE_COLLABORATION_ORIGIN);
+    producer.flushPending("stop"); producer.stop();
+    const durationMs = Math.max(1, clock.now());
+    bus.emit({ type: "record-stop", source: "recorder", track: "main", payload: { reason: "user", durationMs } });
+    const result = await createPackageBuilder().build({ meta: { id: "collab-archive", title: "Collaboration", createdAt: new Date().toISOString(), durationMs, appVersion: "upgrade", ownerId: null, creatorInfo: null, initialLanguage: "javascript", initialFontSize: 14, initialTheme: "dark", mediaCapability: payload.mediaCapability, recordingPerspective: "candidate" }, events: bus.drain(), snapshots: snapshots.finalize(), media: null });
+    const zip = await buildRecordingZip(result.pkg, null);
+    const loaded = await createPackageLoader({ repository: createRecordingStore() }).load({ kind: "file", zip });
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) throw new Error(loaded.error.code);
+    const state = buildFinalReplayStateFromPackage(loaded.package);
+    expect(state.editor.language).toBe("javascript");
+    expect(state.editor.code).toBe("");
+    expect(state.editor.documents?.html.code).toBe("<h1>Edited by interviewer</h1>");
+    expect(loaded.package.events.find((event) => event.type === "content-change")).toMatchObject({ payload: { documentId: "source:html", origin: "remote" } });
+    producer.dispose(); candidate.destroy(); interviewer.destroy();
+  });
+});

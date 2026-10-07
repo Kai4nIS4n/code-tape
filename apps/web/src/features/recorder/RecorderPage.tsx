@@ -89,6 +89,8 @@ type DeviceList = Pick<DeviceOptions, "audio" | "camera">;
 type MediaOpenRequest = { audioDeviceId?: string | null; cameraDeviceId?: string | null };
 type PermissionStatus = "granted" | "denied" | "not-found" | "busy";
 type RecorderRuntimeState = {
+  runId?: string;
+  inputDocumentsHash?: string;
   status: "idle" | "running" | "success" | "error" | "timeout";
   stdout: string[];
   stderr: string[];
@@ -125,6 +127,7 @@ export function RecorderPage({ onEventBusReady, collaboration = null }: Recorder
   const mediaRecorderRef = useRef<ReturnType<typeof createMediaRecorderWrapper> | null>(null);
   const mountedRef = useRef(true);
   const startInFlightRef = useRef(false);
+  const runInFlightRef = useRef(false);
   const startTokenRef = useRef(0);
   const stopTokenRef = useRef(0);
   const autoRunTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -173,7 +176,16 @@ export function RecorderPage({ onEventBusReady, collaboration = null }: Recorder
         editorRef.current?.setModelLanguage(language);
       },
     });
-    const collaborativeProducer = collaboration ? createCollaborativeRecordingProducer({ session: collaboration, bus, clock, getCurrentLanguage: () => currentEditorLanguage }) : null;
+    const collaborativeProducer = collaboration ? createCollaborativeRecordingProducer({
+      session: collaboration, bus, clock, getCurrentLanguage: () => currentEditorLanguage,
+      getActiveScriptLanguage: () => activeScriptLanguageRef.current,
+      getCurrentViewDocuments: () => {
+        const editor = editorRef.current?.getEditor();
+        const documents = { ...editorDocumentsRef.current };
+        if (editor) documents[currentEditorLanguage] = { ...documents[currentEditorLanguage], cursor: editor.getPosition(), selection: editor.getSelection(), scrollTop: editor.getScrollTop(), scrollLeft: editor.getScrollLeft() };
+        return documents;
+      },
+    }) : null;
     const pointerProducer = createPointerProducer({
       bus,
       clock,
@@ -200,6 +212,11 @@ export function RecorderPage({ onEventBusReady, collaboration = null }: Recorder
       repository,
       appVersion: APP_VERSION,
       recordingPerspective: collaboration ? "candidate" : undefined,
+      recordingParticipants: collaboration ? () => collaboration.getRecordingParticipants() : undefined,
+      beforeSnapshot: () => {
+        collaborativeProducer?.flushPending("snapshot");
+        editorProducer.flushPending("snapshot");
+      },
       mediaSource: async () => {
         const recorder = mediaRecorderRef.current;
         mediaRecorderRef.current = null;
@@ -282,6 +299,9 @@ export function RecorderPage({ onEventBusReady, collaboration = null }: Recorder
   const [mediaPermissionNotice, setMediaPermissionNotice] = useState<string | null>(null);
   const [mediaPermissionRequesting, setMediaPermissionRequesting] = useState(false);
   const [runtimeState, setRuntimeState] = useState<RecorderRuntimeState>(INITIAL_RUNTIME_STATE);
+  useEffect(() => stack.bus.subscribe((event) => {
+    if (event.type === "run-start") setRuntimeState((current) => ({ ...current, runId: event.payload.runId, inputDocumentsHash: event.payload.inputDocumentsHash }));
+  }), [stack.bus]);
 
   useEffect(() => {
     const bus = Object.assign(stack.bus, { flushPending: () => {
@@ -289,7 +309,7 @@ export function RecorderPage({ onEventBusReady, collaboration = null }: Recorder
       stack.editorProducer.flushPending("snapshot");
     } });
     return onEventBusReady?.(bus) ?? undefined;
-  }, [onEventBusReady, stack.bus]);
+  }, [onEventBusReady, stack.bus, stack.collaborativeProducer, stack.editorProducer]);
 
   useEffect(() => {
     return () => {
@@ -684,7 +704,7 @@ export function RecorderPage({ onEventBusReady, collaboration = null }: Recorder
 
   const handleRun = async (options: { clearPendingAutoRun?: boolean } = {}) => {
     if (options.clearPendingAutoRun ?? true) clearAutoRunTimer();
-    if (isRuntimeRunLocked()) return;
+    if (isRuntimeRunLocked() || runInFlightRef.current) return;
     const runtimeLanguage = stack.getCurrentRuntimeLanguage();
     // Python 不执行：跳过运行，保持高亮/录制/回放。
     if (runtimeLanguage === null) return;
@@ -693,6 +713,7 @@ export function RecorderPage({ onEventBusReady, collaboration = null }: Recorder
     const activeDocument = captureCurrentEditorDocument();
     stack.editorProducer.flushPending();
     stack.collaborativeProducer?.flushPending("run");
+    runInFlightRef.current = true;
     setRuntimeState({ status: "running", stdout: [], stderr: [], errorMessage: null });
     try {
       const result = await stack.runtimeProducer.trigger({
@@ -701,37 +722,44 @@ export function RecorderPage({ onEventBusReady, collaboration = null }: Recorder
         documents: editorDocumentsAsSources(),
         activeScriptLanguage: activeScriptLanguageRef.current,
       });
+      if (!mountedRef.current) return;
       if (result.status === "complete") {
-        setRuntimeState({
+        setRuntimeState((current) => ({
+          ...current,
           status: "success",
           stdout: result.stdout,
           stderr: result.stderr,
           errorMessage: null,
-        });
+        }));
         return;
       }
       if (result.status === "timeout") {
-        setRuntimeState({
+        setRuntimeState((current) => ({
+          ...current,
           status: "timeout",
           stdout: result.stdout,
           stderr: result.stderr,
           errorMessage: "runtime-timeout",
-        });
+        }));
         return;
       }
-      setRuntimeState({
+      setRuntimeState((current) => ({
+        ...current,
         status: "error",
         stdout: result.stdout,
         stderr: result.stderr,
         errorMessage: result.message,
-      });
+      }));
     } catch (err) {
-      setRuntimeState({
+      setRuntimeState((current) => ({
+        ...current,
         status: "error",
         stdout: [],
         stderr: [],
         errorMessage: err instanceof Error ? err.message : String(err),
-      });
+      }));
+    } finally {
+      runInFlightRef.current = false;
     }
   };
 
@@ -886,7 +914,10 @@ export function RecorderPage({ onEventBusReady, collaboration = null }: Recorder
                 onReset={() => setRuntimeState(INITIAL_RUNTIME_STATE)}
               />
             }
-            right={<RuntimeOutputPanel runtime={runtimeState} />}
+            right={<div className="flex h-full min-h-0 flex-col">
+              {runtimeState.inputDocumentsHash ? <p className="border-b border-border px-3 py-1 font-mono text-xs text-muted">运行输入版本：{runtimeState.inputDocumentsHash.slice(0, 12)}</p> : null}
+              <RuntimeOutputPanel runtime={runtimeState} />
+            </div>}
           />
         }
       />

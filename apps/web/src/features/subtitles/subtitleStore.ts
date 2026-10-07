@@ -49,33 +49,72 @@ export function createSubtitleStore(options: SubtitleStoreOptions = {}): Subtitl
       const db = await getDb();
       const tx = db.transaction([STORE_SUBTITLES, STORE_CHAPTERS, STORE_ANCHORS], "readonly");
       const [track, chapterRecord, anchorRecord] = await Promise.all([
-        promisifyRequest(tx.objectStore(STORE_SUBTITLES).get(recordingId)) as Promise<SubtitleTrack | undefined>,
-        promisifyRequest(tx.objectStore(STORE_CHAPTERS).get(recordingId)) as Promise<{ chapters: SubtitleChapter[] } | undefined>,
-        promisifyRequest(tx.objectStore(STORE_ANCHORS).get(recordingId)) as Promise<Omit<SubtitleAsset, "track" | "chapters"> | undefined>,
+        promisifyRequest(tx.objectStore(STORE_SUBTITLES).get(recordingId)) as Promise<
+          SubtitleTrack | undefined
+        >,
+        promisifyRequest(tx.objectStore(STORE_CHAPTERS).get(recordingId)) as Promise<
+          { chapters: SubtitleChapter[] } | undefined
+        >,
+        promisifyRequest(tx.objectStore(STORE_ANCHORS).get(recordingId)) as Promise<
+          Omit<SubtitleAsset, "track" | "chapters"> | undefined
+        >,
       ]);
       await awaitTransaction(tx);
       if (!track) return null;
-      return { recordingId, track, chapters: chapterRecord?.chapters ?? [], anchors: anchorRecord?.anchors ?? [], sourceEventsChecksum: anchorRecord?.sourceEventsChecksum ?? "", subtitleTrackRevision: track.revision ?? 0 };
+      return {
+        recordingId,
+        track,
+        chapters: chapterRecord?.chapters ?? [],
+        anchors: anchorRecord?.anchors ?? [],
+        sourceEventsChecksum: anchorRecord?.sourceEventsChecksum ?? "",
+        subtitleTrackRevision: track.revision ?? 0,
+      };
     },
     async saveAsset(asset, expectedRevision, signal) {
       if (signal?.aborted) throw new DOMException("字幕保存已取消", "AbortError");
       const db = await getDb();
       if (signal?.aborted) throw new DOMException("字幕保存已取消", "AbortError");
       const tx = db.transaction([STORE_SUBTITLES, STORE_CHAPTERS, STORE_ANCHORS], "readwrite");
-      const onAbort = () => { try { tx.abort(); } catch { /* A completed transaction cannot be canceled. */ } };
+      const onAbort = () => {
+        try {
+          tx.abort();
+        } catch {
+          /* A completed transaction cannot be canceled. */
+        }
+      };
       signal?.addEventListener("abort", onAbort, { once: true });
       try {
-        const saved = await promisifyRequest(tx.objectStore(STORE_SUBTITLES).get(asset.recordingId)) as SubtitleTrack | undefined;
-        if ((saved?.revision ?? 0) !== expectedRevision) { await awaitTransaction(tx); return false; }
-        if (signal?.aborted) { onAbort(); throw new DOMException("字幕保存已取消", "AbortError"); }
+        const saved = (await promisifyRequest(
+          tx.objectStore(STORE_SUBTITLES).get(asset.recordingId),
+        )) as SubtitleTrack | undefined;
+        if ((saved?.revision ?? 0) !== expectedRevision) {
+          await awaitTransaction(tx);
+          return false;
+        }
+        if (signal?.aborted) {
+          onAbort();
+          throw new DOMException("字幕保存已取消", "AbortError");
+        }
         const revision = expectedRevision + 1;
         tx.objectStore(STORE_SUBTITLES).put({ ...asset.track, revision });
-        tx.objectStore(STORE_CHAPTERS).put({ recordingId: asset.recordingId, chapters: asset.chapters });
-        tx.objectStore(STORE_ANCHORS).put({ recordingId: asset.recordingId, sourceEventsChecksum: asset.sourceEventsChecksum, subtitleTrackRevision: revision, anchors: asset.anchors });
+        tx.objectStore(STORE_CHAPTERS).put({
+          recordingId: asset.recordingId,
+          chapters: asset.chapters,
+        });
+        tx.objectStore(STORE_ANCHORS).put({
+          recordingId: asset.recordingId,
+          sourceEventsChecksum: asset.sourceEventsChecksum,
+          subtitleTrackRevision: revision,
+          anchors: asset.anchors,
+        });
         await awaitTransaction(tx);
         return true;
-      } catch (error) { onAbort(); throw error; }
-      finally { signal?.removeEventListener("abort", onAbort); }
+      } catch (error) {
+        onAbort();
+        throw error;
+      } finally {
+        signal?.removeEventListener("abort", onAbort);
+      }
     },
     async load(recordingId: string): Promise<SubtitleTrack | null> {
       const db = await getDb();

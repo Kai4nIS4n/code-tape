@@ -25,14 +25,26 @@ import type {
   CloudPlaybackDescriptor,
   ListRecordingsResponse,
 } from "../types";
-import { createCloudRecordingRepository } from "../cloudRecordingRepository";
+import {
+  createCloudRecordingRepository as createRepository,
+  type CloudRecordingRepositoryOptions,
+} from "../cloudRecordingRepository";
+import { createAuthClient, type AuthClient } from "@/features/auth/authClient";
+const testAuthClients: AuthClient[] = [];
+function createCloudRecordingRepository(options: CloudRecordingRepositoryOptions = {}) {
+  const auth = options.auth ?? createAuthClient({ apiBase: options.apiBase, broadcast: false });
+  testAuthClients.push(auth);
+  return createRepository({ ...options, auth });
+}
 
 // ─────────────────────────────────────────────────────────────
 // 测试辅助工厂函数
 // ─────────────────────────────────────────────────────────────
 
 /** 构造一份最简 CreateUploadSessionRequest */
-function makeCreateSessionRequest(overrides: Partial<CreateUploadSessionRequest> = {}): CreateUploadSessionRequest {
+function makeCreateSessionRequest(
+  overrides: Partial<CreateUploadSessionRequest> = {},
+): CreateUploadSessionRequest {
   return {
     idempotencyKey: "test-key-1",
     localPackageId: "local-pkg-1",
@@ -128,42 +140,54 @@ function makeMinimalPackage(opts: { hasMedia: boolean }): RecordingPackageV1 {
         selectedCameraDeviceId: null,
       },
     },
-    events: [{
-      id: "e-1",
-      seq: 1,
-      timestampMs: 100,
-      source: "editor",
-      track: "main",
-      type: "content-change",
-      payload: {
-        fileId: "main",
-        version: 1,
-        code: "console.log(1)",
-        contentHash: "h1",
-        language: "javascript",
-        changeReason: "input",
-        changeCount: 1,
-        flushedBy: "debounce",
-      },
-    }],
-    snapshots: [{
-      id: "snap-1",
-      timestampMs: 0,
-      eventSeq: 1,
-      state: {
-        editor: {
+    events: [
+      {
+        id: "e-1",
+        seq: 1,
+        timestampMs: 100,
+        source: "editor",
+        track: "main",
+        type: "content-change",
+        payload: {
+          fileId: "main",
+          version: 1,
           code: "console.log(1)",
+          contentHash: "h1",
           language: "javascript",
-          cursor: null,
-          selection: null,
-          scrollTop: 0,
-          scrollLeft: 0,
+          changeReason: "input",
+          changeCount: 1,
+          flushedBy: "debounce",
         },
-        status: "idle",
       },
-    }],
+    ],
+    snapshots: [
+      {
+        id: "snap-1",
+        timestampMs: 0,
+        eventSeq: 1,
+        state: {
+          editor: {
+            code: "console.log(1)",
+            language: "javascript",
+            cursor: null,
+            selection: null,
+            scrollTop: 0,
+            scrollLeft: 0,
+          },
+          status: "idle",
+        },
+      },
+    ],
     media: opts.hasMedia
-      ? { blobId: "media-1", mimeType: "video/webm", durationMs: 5000, sizeBytes: 100, timelineOffsetMs: 0, hasAudio: true, hasCamera: true }
+      ? {
+          blobId: "media-1",
+          mimeType: "video/webm",
+          durationMs: 5000,
+          sizeBytes: 100,
+          timelineOffsetMs: 0,
+          hasAudio: true,
+          hasCamera: true,
+        }
       : null,
   } as unknown as RecordingPackageV1;
 }
@@ -259,7 +283,7 @@ function makePlaybackDescriptor(
 
 // 业务响应队列（FIFO）；access token 刷新端点不入队，由默认实现透明应答。
 const businessResponseQueue: Array<() => Promise<Response> | Response> = [];
-// 允许单个用例覆盖 /api/auth/token 的应答（模拟刷新失败）。
+// 允许单个用例覆盖 /api/auth/refresh 的应答（模拟刷新失败）。
 let authTokenResponder: (() => Promise<Response> | Response) | null = null;
 
 function authTokenResponse(): Response {
@@ -269,6 +293,7 @@ function authTokenResponse(): Response {
     statusText: "OK",
     headers: new Headers({ "content-type": "application/json" }),
     json: async () => ({
+      user: { id: "test-user", username: "tester", displayName: "Tester" },
       accessToken: "test.access.token",
       expiresAt: Date.now() + 15 * 60 * 1000,
       tokenType: "Bearer",
@@ -279,7 +304,7 @@ function authTokenResponse(): Response {
 function installFetchRouter() {
   vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    if (url.includes("/api/auth/token")) {
+    if (url.includes("/api/auth/refresh")) {
       return (authTokenResponder ?? authTokenResponse)();
     }
     const next = businessResponseQueue.shift();
@@ -289,13 +314,16 @@ function installFetchRouter() {
 }
 
 function mockFetch(status: number, body: unknown, headers: Record<string, string> = {}) {
-  businessResponseQueue.push(() => ({
-    ok: status >= 200 && status < 300,
-    status,
-    statusText: status === 200 ? "OK" : "Error",
-    headers: new Headers({ "content-type": "application/json", ...headers }),
-    json: async () => body,
-  } as Response));
+  businessResponseQueue.push(
+    () =>
+      ({
+        ok: status >= 200 && status < 300,
+        status,
+        statusText: status === 200 ? "OK" : "Error",
+        headers: new Headers({ "content-type": "application/json", ...headers }),
+        json: async () => body,
+      }) as Response,
+  );
 }
 
 function mockFetchReject(error: Error) {
@@ -354,6 +382,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  testAuthClients.splice(0).forEach((auth) => auth.dispose());
   vi.restoreAllMocks();
 });
 
@@ -371,14 +400,23 @@ function setupRepo(): CloudRecordingRepository {
   return createCloudRecordingRepository();
 }
 
-/** 取出业务请求（过滤掉 dual-token 的 /api/auth/token 调用）的第 index 次调用参数。 */
+/** 取出业务请求（过滤掉 dual-token 的 /api/auth/refresh 调用）的第 index 次调用参数。 */
 function businessFetchCall(index = 0): [RequestInfo | URL, RequestInit | undefined] {
   const calls = vi.mocked(fetch).mock.calls.filter((call) => {
     const input = call[0];
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    return !url.includes("/api/auth/token");
+    return !url.includes("/api/auth/refresh");
   });
-  return calls[index] as [RequestInfo | URL, RequestInit | undefined];
+  const call = calls[index] as [RequestInfo | URL, RequestInit | undefined];
+  return [
+    call[0],
+    {
+      ...call[1],
+      ...(call[1]?.headers
+        ? { headers: Object.fromEntries(new Headers(call[1].headers).entries()) }
+        : {}),
+    },
+  ];
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -390,59 +428,21 @@ describe("CloudRecordingRepository", () => {
   // owner token
   // ───────────────────────────────────────────────────────
 
-  describe("getOwnerToken", () => {
-    it("首次调用生成随机 hex token 并持久化到 localStorage", () => {
+  describe("account identity", () => {
+    it("does not create anonymous credentials", () => {
       const repo = setupRepo();
-      const token = repo.getOwnerToken();
-      expect(token).toMatch(/^[a-f0-9]{64}$/);
-      expect(localStorage.getItem("code-tape-cloud-owner-token")).toBe(token);
+      expect(repo.getOwnerToken()).toBe("");
+      expect(localStorage.getItem("code-tape-cloud-owner-token")).toBeNull();
     });
-
-    it("再次调用返回已持久化的同一 token", () => {
+    it("ignores a legacy owner token and returns the authenticated user ID", async () => {
+      localStorage.setItem("code-tape-cloud-owner-token", "legacy-token");
       const repo = setupRepo();
-      const first = repo.getOwnerToken();
-      const second = repo.getOwnerToken();
-      expect(second).toBe(first);
-    });
-
-    it("localStorage 不可用时同一 repo 实例多次调用返回同一 token", () => {
-      // 模拟 localStorage 完全不可用
-      vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
-        throw new Error("localStorage disabled");
-      });
-      vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-        throw new Error("localStorage disabled");
-      });
-
-      const repo = createCloudRecordingRepository();
-      const first = repo.getOwnerToken();
-      const second = repo.getOwnerToken();
-      expect(second).toBe(first);
-      expect(first).toMatch(/^[a-f0-9]{64}$/);
-    });
-
-    it("已持久化 token 为非 hex 脏值时忽略并重新生成合法 token", () => {
-      localStorage.setItem("code-tape-cloud-owner-token", "z".repeat(64));
-
-      const repo = setupRepo();
-      const token = repo.getOwnerToken();
-
-      expect(token).toMatch(/^[a-f0-9]{64}$/);
-      expect(token).not.toBe("z".repeat(64));
-      expect(localStorage.getItem("code-tape-cloud-owner-token")).toBe(token);
-    });
-
-    it("不同 repository 实例共享同一持久化 token", () => {
-      const repo1 = setupRepo();
-      const token = repo1.getOwnerToken();
-      const repo2 = createCloudRecordingRepository();
-      expect(repo2.getOwnerToken()).toBe(token);
+      mockFetch(200, makeListResponse([]));
+      await repo.list();
+      expect(repo.getOwnerToken()).toBe("test-user");
+      expect(localStorage.getItem("code-tape-cloud-owner-token")).toBe("legacy-token");
     });
   });
-
-  // ───────────────────────────────────────────────────────
-  // createUploadSession
-  // ───────────────────────────────────────────────────────
 
   describe("createUploadSession", () => {
     it("成功创建上传会话并返回 upload targets", async () => {
@@ -459,7 +459,7 @@ describe("CloudRecordingRepository", () => {
       expect(result.value.uploadTargets[0].method).toBe("PUT");
     });
 
-    it("在业务请求中携带 Bearer access token，refresh token 仅发往 /api/auth/token", async () => {
+    it("在业务请求中携带 Bearer access token，refresh token 仅发往 /api/auth/refresh", async () => {
       const repo = setupRepo();
       mockFetch(201, makeSessionResponse());
 
@@ -471,22 +471,30 @@ describe("CloudRecordingRepository", () => {
       // refresh token（设备 token）不得随业务请求裸传
       expect(headers["x-owner-token"]).toBeUndefined();
 
-      // refresh token 只出现在 /api/auth/token 请求体中
+      // refresh token 只出现在 /api/auth/refresh 请求体中
       const authCall = vi.mocked(fetch).mock.calls.find((call) => {
         const input = call[0];
-        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-        return url.includes("/api/auth/token");
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        return url.includes("/api/auth/refresh");
       });
       expect(authCall).toBeDefined();
-      const authBody = JSON.parse((authCall?.[1]?.body as string) ?? "{}") as { refreshToken?: string };
-      expect(authBody.refreshToken).toBe(repo.getOwnerToken());
+      const authBody = JSON.parse((authCall?.[1]?.body as string) ?? "{}") as {
+        refreshToken?: string;
+      };
+      expect(authBody.refreshToken).toBeUndefined();
+      expect(authCall?.[1]?.credentials).toBe("same-origin");
     });
 
     it("API 返回错误时返回 ok: false 及结构化错误", async () => {
       const repo = setupRepo();
-      mockFetch(422, {
-        error: { code: "unsupported-schema", message: "unsupported schemaVersion" },
-      }, { "x-request-id": "req-err-1" });
+      mockFetch(
+        422,
+        {
+          error: { code: "unsupported-schema", message: "unsupported schemaVersion" },
+        },
+        { "x-request-id": "req-err-1" },
+      );
 
       const result = await repo.createUploadSession(makeCreateSessionRequest());
       expect(result.ok).toBe(false);
@@ -542,7 +550,7 @@ describe("CloudRecordingRepository", () => {
 
     it("token 刷新失败时不把 refresh token 裸传到业务端点（返回 unauthorized）", async () => {
       const repo = setupRepo();
-      // /api/auth/token 全部失败（500）。
+      // /api/auth/refresh 全部失败（500）。
       authTokenResponder = () =>
         ({
           ok: false,
@@ -559,8 +567,9 @@ describe("CloudRecordingRepository", () => {
       // 关键安全断言：没有任何业务请求发出（更不会带 x-owner-token）。
       const businessCalls = vi.mocked(fetch).mock.calls.filter((call) => {
         const input = call[0];
-        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-        return !url.includes("/api/auth/token");
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        return !url.includes("/api/auth/refresh");
       });
       expect(businessCalls).toHaveLength(0);
     });
@@ -582,8 +591,9 @@ describe("CloudRecordingRepository", () => {
       expect(result.error.code).toBe("unauthorized");
       const businessCalls = vi.mocked(fetch).mock.calls.filter((call) => {
         const input = call[0];
-        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-        return !url.includes("/api/auth/token");
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        return !url.includes("/api/auth/refresh");
       });
       expect(businessCalls).toHaveLength(0);
     });
@@ -675,11 +685,14 @@ describe("CloudRecordingRepository", () => {
 
     it("worker 校验通过后返回 ready 状态", async () => {
       const repo = setupRepo();
-      mockFetch(200, makeDetailResponse({
-        status: "ready",
-        eventCount: 10,
-        snapshotCount: 2,
-      }));
+      mockFetch(
+        200,
+        makeDetailResponse({
+          status: "ready",
+          eventCount: 10,
+          snapshotCount: 2,
+        }),
+      );
 
       const result = await repo.get("rec_1");
       expect(result.ok).toBe(true);
@@ -689,11 +702,14 @@ describe("CloudRecordingRepository", () => {
 
     it("校验失败返回 failed 状态及 failureCode", async () => {
       const repo = setupRepo();
-      mockFetch(200, makeDetailResponse({
-        status: "failed",
-        failureCode: "checksum-mismatch",
-        failureMessage: "media checksum does not match",
-      }));
+      mockFetch(
+        200,
+        makeDetailResponse({
+          status: "failed",
+          failureCode: "checksum-mismatch",
+          failureMessage: "media checksum does not match",
+        }),
+      );
 
       const result = await repo.get("rec_1");
       expect(result.ok).toBe(true);
@@ -778,7 +794,10 @@ describe("CloudRecordingRepository", () => {
   describe("getPlaybackDescriptor", () => {
     it("返回 ready 录制的 playback descriptor", async () => {
       const repo = setupRepo();
-      mockFetch(200, makePlaybackDescriptor({ indexesUrl: "https://storage.example.com/rec_1/indexes.json" }));
+      mockFetch(
+        200,
+        makePlaybackDescriptor({ indexesUrl: "https://storage.example.com/rec_1/indexes.json" }),
+      );
 
       const result = await repo.getPlaybackDescriptor("rec_1");
 
@@ -800,9 +819,13 @@ describe("CloudRecordingRepository", () => {
 
     it("playback descriptor 错误时保留结构化错误和 requestId", async () => {
       const repo = setupRepo();
-      mockFetch(404, {
-        error: { code: "not-found", message: "recording not found" },
-      }, { "x-request-id": "req-playback-1" });
+      mockFetch(
+        404,
+        {
+          error: { code: "not-found", message: "recording not found" },
+        },
+        { "x-request-id": "req-playback-1" },
+      );
 
       const result = await repo.getPlaybackDescriptor("rec_missing");
 
@@ -864,9 +887,13 @@ describe("CloudRecordingRepository", () => {
 
     it("returns structured errors when share link creation fails", async () => {
       const repo = setupRepo();
-      mockFetch(404, {
-        error: { code: "not-found", message: "recording not found" },
-      }, { "x-request-id": "req-share-1" });
+      mockFetch(
+        404,
+        {
+          error: { code: "not-found", message: "recording not found" },
+        },
+        { "x-request-id": "req-share-1" },
+      );
 
       const result = await repo.createShareLink("rec_missing", {});
 
@@ -911,9 +938,13 @@ describe("CloudRecordingRepository", () => {
 
     it("rename 非法标题时返回后端结构化错误", async () => {
       const repo = setupRepo();
-      mockFetch(400, {
-        error: { code: "bad-request", message: "title is required" },
-      }, { "x-request-id": "req-rename-1" });
+      mockFetch(
+        400,
+        {
+          error: { code: "bad-request", message: "title is required" },
+        },
+        { "x-request-id": "req-rename-1" },
+      );
 
       const result = await repo.rename("rec_1", "");
 
@@ -984,8 +1015,13 @@ describe("CloudRecordingRepository", () => {
         progressEvents.push({ ...p });
       });
 
-      const xhrInstance = (globalThis.XMLHttpRequest as unknown as ReturnType<typeof vi.fn>).mock.results[0].value as MockXhr;
-      const progressEvent = new ProgressEvent("progress", { lengthComputable: true, loaded: 500, total: 1000 });
+      const xhrInstance = (globalThis.XMLHttpRequest as unknown as ReturnType<typeof vi.fn>).mock
+        .results[0].value as MockXhr;
+      const progressEvent = new ProgressEvent("progress", {
+        lengthComputable: true,
+        loaded: 500,
+        total: 1000,
+      });
       if (xhrInstance.upload.onprogress) xhrInstance.upload.onprogress(progressEvent);
       if (xhrInstance.onload) xhrInstance.onload();
 
@@ -1126,10 +1162,20 @@ describe("CloudRecordingRepository", () => {
         hasAudio: false,
         hasCamera: false,
         assets: [
-          { kind: "manifest", sha256: "a".repeat(64), sizeBytes: 256, mimeType: "application/json" },
+          {
+            kind: "manifest",
+            sha256: "a".repeat(64),
+            sizeBytes: 256,
+            mimeType: "application/json",
+          },
           { kind: "meta", sha256: "b".repeat(64), sizeBytes: 512, mimeType: "application/json" },
           { kind: "events", sha256: "c".repeat(64), sizeBytes: 2048, mimeType: "application/json" },
-          { kind: "snapshots", sha256: "d".repeat(64), sizeBytes: 1024, mimeType: "application/json" },
+          {
+            kind: "snapshots",
+            sha256: "d".repeat(64),
+            sizeBytes: 1024,
+            mimeType: "application/json",
+          },
         ],
       });
 
@@ -1209,9 +1255,9 @@ describe("CloudRecordingRepository", () => {
         expectedMediaSha256,
       );
 
-      const completeBody = JSON.parse(
-        businessFetchCall(1)?.[1]?.body as string,
-      ) as { uploadedAssets: CreateUploadSessionRequest["assets"] };
+      const completeBody = JSON.parse(businessFetchCall(1)?.[1]?.body as string) as {
+        uploadedAssets: CreateUploadSessionRequest["assets"];
+      };
       expect(completeBody.uploadedAssets.find((asset) => asset.kind === "media")?.sha256).toBe(
         expectedMediaSha256,
       );
@@ -1220,14 +1266,17 @@ describe("CloudRecordingRepository", () => {
     it("无媒体录制包也能成功上传", async () => {
       const repo = setupRepo();
 
-      mockFetch(201, makeSessionResponse({
-        uploadTargets: [
-          makeUploadTarget("manifest"),
-          makeUploadTarget("meta"),
-          makeUploadTarget("events"),
-          makeUploadTarget("snapshots"),
-        ],
-      }));
+      mockFetch(
+        201,
+        makeSessionResponse({
+          uploadTargets: [
+            makeUploadTarget("manifest"),
+            makeUploadTarget("meta"),
+            makeUploadTarget("events"),
+            makeUploadTarget("snapshots"),
+          ],
+        }),
+      );
 
       for (let i = 0; i < 4; i++) {
         const { instance } = createMockXhr();
@@ -1278,40 +1327,56 @@ describe("CloudRecordingRepository", () => {
 
       const progressEvents: UploadProgress[] = [];
       const pkg = makeMinimalPackage({ hasMedia: true });
-      const uploadPromise = repo.uploadPackage(pkg, { media: mediaBlob }, {
-        onProgress: (p) => progressEvents.push({ ...p }),
-      });
+      const uploadPromise = repo.uploadPackage(
+        pkg,
+        { media: mediaBlob },
+        {
+          onProgress: (p) => progressEvents.push({ ...p }),
+        },
+      );
 
       // 等待 buildPackageAssetDefs (SHA hash) + createUploadSession 到达第一个 uploadAsset
-      await vi.waitFor(() => {
-        expect(xhrMocks.length).toBeGreaterThanOrEqual(1);
-      }, { timeout: 10000 });
+      await vi.waitFor(
+        () => {
+          expect(xhrMocks.length).toBeGreaterThanOrEqual(1);
+        },
+        { timeout: 10000 },
+      );
 
       // 资产 1 (manifest)：触发 XHR 中间进度，然后 onload 完成
       xhrMocks[0].upload.onprogress?.(
         new ProgressEvent("progress", { lengthComputable: true, loaded: 150, total: 500 }),
       );
       xhrMocks[0].onload?.();
-      await vi.waitFor(() => {
-        expect(xhrMocks.length).toBeGreaterThanOrEqual(2);
-      }, { timeout: 5000 });
+      await vi.waitFor(
+        () => {
+          expect(xhrMocks.length).toBeGreaterThanOrEqual(2);
+        },
+        { timeout: 5000 },
+      );
 
       // 资产 2 (meta)：触发 XHR 中间进度，然后 onload 完成
       xhrMocks[1].upload.onprogress?.(
         new ProgressEvent("progress", { lengthComputable: true, loaded: 200, total: 300 }),
       );
       xhrMocks[1].onload?.();
-      await vi.waitFor(() => {
-        expect(xhrMocks.length).toBeGreaterThanOrEqual(3);
-      }, { timeout: 5000 });
+      await vi.waitFor(
+        () => {
+          expect(xhrMocks.length).toBeGreaterThanOrEqual(3);
+        },
+        { timeout: 5000 },
+      );
 
       // 完成剩余资产（不再触发中间进度）
       for (let i = 2; i < 5; i++) {
         xhrMocks[i].onload?.();
         if (i < 4) {
-          await vi.waitFor(() => {
-            expect(xhrMocks.length).toBeGreaterThanOrEqual(i + 2);
-          }, { timeout: 5000 });
+          await vi.waitFor(
+            () => {
+              expect(xhrMocks.length).toBeGreaterThanOrEqual(i + 2);
+            },
+            { timeout: 5000 },
+          );
         }
       }
 
@@ -1324,7 +1389,9 @@ describe("CloudRecordingRepository", () => {
 
       // bytesUploaded 单调不减（跨资产进度正确累加，不会因切换资产而跳回 0）
       for (let i = 1; i < progressEvents.length; i++) {
-        expect(progressEvents[i].bytesUploaded).toBeGreaterThanOrEqual(progressEvents[i - 1].bytesUploaded);
+        expect(progressEvents[i].bytesUploaded).toBeGreaterThanOrEqual(
+          progressEvents[i - 1].bytesUploaded,
+        );
       }
 
       // 能收到来自不同资产的进度事件（证明中间进度已透传，而非仅在资产完成后回调）
@@ -1344,7 +1411,9 @@ describe("CloudRecordingRepository", () => {
       mockFetch(201, makeSessionResponse());
 
       // mock crypto.subtle.digest 失败
-      vi.spyOn(globalThis.crypto.subtle, "digest").mockRejectedValueOnce(new Error("crypto unavailable"));
+      vi.spyOn(globalThis.crypto.subtle, "digest").mockRejectedValueOnce(
+        new Error("crypto unavailable"),
+      );
 
       const pkg = makeMinimalPackage({ hasMedia: true });
       const result = await repo.uploadPackage(pkg, { media: mediaBlob });

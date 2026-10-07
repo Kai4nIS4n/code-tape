@@ -10,11 +10,14 @@ import type {
   RecordingEvent,
   RecordingPackageV1,
   RecordStartPayload,
+  RecordingMeta,
 } from "@/shared/recording-schema";
 
 export type RecordingControllerOptions = RecordingControllerDeps & {
   appVersion: string;
   recordingPerspective?: "candidate";
+  recordingParticipants?: () => RecordingMeta["participants"];
+  beforeSnapshot?: () => void;
   generateTitle?: () => string;
   mediaSource?: () => Promise<PackageBuildInput["media"]>;
   onPersistenceFailure?: (failure: RecordingPersistenceFailure) => void | Promise<void>;
@@ -51,7 +54,7 @@ export type RecordingPersistenceFailure = PendingPackageSave & { error: unknown 
 export function createRecordingController(options: RecordingControllerOptions): RecordingController {
   const { clock, bus, producers, packageBuilder, repository } = options;
   const listeners = new Set<(s: RecordingControllerState) => void>();
-  const snapshotBuilder = createSnapshotBuilder();
+  const snapshotBuilder = createSnapshotBuilder({ beforeCapture: options.beforeSnapshot });
   bus.subscribe((event) => snapshotBuilder.apply(event));
 
   let state: RecordingControllerState = {
@@ -183,6 +186,7 @@ export function createRecordingController(options: RecordingControllerOptions): 
               ownerId: null,
               creatorInfo: null,
               recordingPerspective: options.recordingPerspective,
+              participants: options.recordingParticipants?.(),
               documents: options.recordingPerspective ? ["source:javascript", "source:typescript", "source:python", "source:html", "source:css"] : undefined,
               initialLanguage: startPayload.initialLanguage,
               initialActiveScriptLanguage: startPayload.initialActiveScriptLanguage,

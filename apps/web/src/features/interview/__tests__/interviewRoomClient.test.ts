@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { createInterviewRoomClient } from "../interviewRoomClient";
+import { createInterviewRoomClient, createInterviewRoomInvite } from "../interviewRoomClient";
 
 describe("InterviewRoomClient", () => {
+  it("explicitly issues a new invitation instead of recovering a persisted plaintext code", async () => {
+    const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init);
+      expect(request.url).toBe("https://app.example/api/interviews/rooms/room%2F1/invites");
+      expect(request.method).toBe("POST");
+      expect(await request.json()).toEqual({});
+      return json({ token: "NEW-INVITATION", expiresAt: "2026-10-07T12:00:00Z" }, 201);
+    };
+    await expect(createInterviewRoomInvite("room/1", { baseUrl: "https://app.example", fetch })).resolves.toEqual({
+      ok: true, value: { joinCode: "NEW-INVITATION", expiresAt: "2026-10-07T12:00:00Z" },
+    });
+  });
+
   it("creates, reads, and ends interview rooms with typed responses", async () => {
     const requests: Request[] = [];
     const fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {

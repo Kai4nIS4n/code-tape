@@ -3,6 +3,7 @@ import type {
   SubtitlePostProcessorContext,
   SubtitleTrack,
 } from "./types";
+import { applySubtitleCorrection } from "./subtitleCorrection";
 
 export type SubtitlePostProcessorMessage = {
   role: "system" | "user" | "assistant";
@@ -41,7 +42,10 @@ export function estimateMaxNewTokens(track: SubtitleTrack): number {
   }
   return Math.min(
     MAX_DYNAMIC_NEW_TOKENS,
-    Math.max(BASE_MAX_NEW_TOKENS, segmentCount * NEW_TOKENS_PER_SEGMENT + CHAPTER_OUTPUT_TOKEN_RESERVE),
+    Math.max(
+      BASE_MAX_NEW_TOKENS,
+      segmentCount * NEW_TOKENS_PER_SEGMENT + CHAPTER_OUTPUT_TOKEN_RESERVE,
+    ),
   );
 }
 
@@ -113,7 +117,10 @@ function buildSubtitlePostProcessorPayload({
     context: {
       fileName: context?.fileName ?? null,
       code: budgetPromptText(context?.code ?? "", MAX_PROMPT_CODE_CHARS),
-      runtimeOutput: budgetPromptText(context?.runtimeOutput ?? "", MAX_PROMPT_RUNTIME_OUTPUT_CHARS),
+      runtimeOutput: budgetPromptText(
+        context?.runtimeOutput ?? "",
+        MAX_PROMPT_RUNTIME_OUTPUT_CHARS,
+      ),
       glossary: context?.glossary?.slice(0, 100) ?? [],
     },
     inputSegments: track.segments.map((segment) => ({
@@ -159,13 +166,18 @@ export function isRecoverableJsonOutputError(error: unknown): boolean {
   );
 }
 
-export function extractSubtitleCorrectionResult(text: string, independentValidation = false): SubtitleCorrectionResult {
+export function extractSubtitleCorrectionResult(
+  text: string,
+  independentValidation = false,
+): SubtitleCorrectionResult {
   const jsonText = extractJsonObjectText(text);
   let value: unknown;
   try {
     value = JSON.parse(jsonText);
   } catch (error) {
-    throw new Error(`LLM 输出不是合法 JSON: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(
+      `LLM 输出不是合法 JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
   if (!isPlainObject(value)) {
     throw new Error("LLM 输出 JSON 必须是对象");
@@ -177,12 +189,20 @@ export function extractSubtitleCorrectionResult(text: string, independentValidat
 
   return {
     segments: (segments ?? [null]).map((segment, index) => {
-      try { return normalizeSegment(segment, index); }
-      catch (error) { if (!independentValidation) throw error; return { id: "__invalid_segment__", text: "" }; }
+      try {
+        return normalizeSegment(segment, index);
+      } catch (error) {
+        if (!independentValidation) throw error;
+        return { id: "__invalid_segment__", text: "" };
+      }
     }),
     chapters: (chapters ?? [null]).map((chapter, index) => {
-      try { return normalizeChapter(chapter, index); }
-      catch (error) { if (!independentValidation) throw error; return { title: "", startMs: Number.NaN }; }
+      try {
+        return normalizeChapter(chapter, index);
+      } catch (error) {
+        if (!independentValidation) throw error;
+        return { title: "", startMs: Number.NaN };
+      }
     }),
   };
 }
@@ -192,8 +212,45 @@ export function constrainCorrectionToTrack(
   track: SubtitleTrack,
   strict = true,
 ): SubtitleCorrectionResult {
-  // Preserve invalid rows so the caller can reject the entire batch.
-  if (strict) return correction;
+  if (strict) {
+    const durationMs = Math.max(0, ...track.segments.map((segment) => segment.endMs));
+    const startMs = Math.min(...track.segments.map((segment) => segment.startMs));
+    const text = applySubtitleCorrection(track, { segments: correction.segments }, { durationMs });
+    const filteredSegments = constrainCorrectionSegments(correction.segments, track);
+    const seenChapters = new Set<string>();
+    const chapterCandidates =
+      correction.chapters
+        ?.filter((chapter) => !chapter.title.includes("�"))
+        .slice()
+        .sort((a, b) => a.startMs - b.startMs)
+        .filter((chapter) => {
+          const key = `${chapter.startMs}:${chapter.endMs ?? ""}`;
+          if (seenChapters.has(key)) return false;
+          seenChapters.add(key);
+          return true;
+        }) ?? [];
+    const chapters = applySubtitleCorrection(
+      track,
+      { segments: [], chapters: chapterCandidates },
+      { durationMs },
+    );
+    const outsideWindow = chapterCandidates.some((chapter) => chapter.startMs < startMs);
+    const warnings = [
+      ...(correction.validationWarnings ?? []),
+      ...text.warnings,
+      ...chapters.warnings,
+    ];
+    if (outsideWindow)
+      warnings.push({
+        code: "invalid-chapter",
+        message: "chapter time is outside the subtitle batch",
+      });
+    return {
+      segments: text.warnings.length ? [] : filteredSegments,
+      chapters: chapters.warnings.length || outsideWindow ? [] : chapterCandidates,
+      ...(warnings.length ? { validationWarnings: warnings } : {}),
+    };
+  }
   return {
     ...correction,
     segments: constrainCorrectionSegments(correction.segments, track),
@@ -205,7 +262,10 @@ function constrainCorrectionChaptersToTrack(
   chapters: NonNullable<SubtitleCorrectionResult["chapters"]>,
   track: SubtitleTrack,
 ): NonNullable<SubtitleCorrectionResult["chapters"]> {
-  const subtitleStartMs = Math.min(Number.POSITIVE_INFINITY, ...track.segments.map((segment) => segment.startMs));
+  const subtitleStartMs = Math.min(
+    Number.POSITIVE_INFINITY,
+    ...track.segments.map((segment) => segment.startMs),
+  );
   const subtitleEndMs = Math.max(0, ...track.segments.map((segment) => segment.endMs));
   const timelineState = {
     previousEndMs: Number.NEGATIVE_INFINITY,
@@ -217,7 +277,9 @@ function constrainCorrectionChaptersToTrack(
     .filter((chapter) => !chapter.title.includes("�"))
     .map((chapter) => ({
       ...chapter,
-      ...(typeof chapter.endMs === "number" ? { endMs: Math.min(chapter.endMs, subtitleEndMs) } : {}),
+      ...(typeof chapter.endMs === "number"
+        ? { endMs: Math.min(chapter.endMs, subtitleEndMs) }
+        : {}),
     }))
     .filter((chapter) => chapter.endMs === undefined || chapter.endMs > chapter.startMs)
     .sort((left, right) => left.startMs - right.startMs)
@@ -245,9 +307,11 @@ export function constrainCorrectionSegments(
   return segments.filter((segment) => {
     const sourceText = sourceTextById.get(segment.id);
     if (sourceText === undefined) return dropCorrectionSegment(segment.id, "unknown-segment");
-    if (seenSegmentIds.has(segment.id)) return dropCorrectionSegment(segment.id, "duplicate-segment");
+    if (seenSegmentIds.has(segment.id))
+      return dropCorrectionSegment(segment.id, "duplicate-segment");
     if (!segment.text.trim()) return dropCorrectionSegment(segment.id, "empty-text");
-    if (segment.text.includes("�")) return dropCorrectionSegment(segment.id, "replacement-character");
+    if (segment.text.includes("�"))
+      return dropCorrectionSegment(segment.id, "replacement-character");
     if (!isPlausibleTextCorrection(sourceText, segment.text)) {
       return dropCorrectionSegment(segment.id, "implausible-text");
     }
@@ -350,7 +414,9 @@ function countPreservedAsciiTerms(sourceTerms: string[], correctedText: string):
   return preservedIndexes.size;
 }
 
-function buildFusedSourceTerms(sourceTerms: string[]): Array<{ term: string; start: number; end: number }> {
+function buildFusedSourceTerms(
+  sourceTerms: string[],
+): Array<{ term: string; start: number; end: number }> {
   const terms: Array<{ term: string; start: number; end: number }> = [];
   const seen = new Set<string>();
   for (let start = 0; start < sourceTerms.length; start += 1) {
@@ -375,7 +441,10 @@ function hasNearCodeTerm(sourceTerm: string, correctedTerms: string[]): boolean 
 
 function isNearCodeTerm(sourceTerm: string, correctedTerm: string): boolean {
   if (sourceTerm.length < 4 || correctedTerm.length < 3) return false;
-  const maxDistance = Math.max(2, Math.floor(Math.max(sourceTerm.length, correctedTerm.length) * 0.2));
+  const maxDistance = Math.max(
+    2,
+    Math.floor(Math.max(sourceTerm.length, correctedTerm.length) * 0.2),
+  );
   return levenshteinDistanceWithin(sourceTerm, correctedTerm, maxDistance);
 }
 
@@ -449,7 +518,10 @@ function extractJsonObjectText(text: string): string {
   throw new Error("LLM 输出中未找到完整 JSON 对象");
 }
 
-function normalizeSegment(value: unknown, index: number): SubtitleCorrectionResult["segments"][number] {
+function normalizeSegment(
+  value: unknown,
+  index: number,
+): SubtitleCorrectionResult["segments"][number] {
   if (!isPlainObject(value) || typeof value.id !== "string" || typeof value.text !== "string") {
     throw new Error(`LLM segments[${index}] 格式非法`);
   }
@@ -474,7 +546,9 @@ function normalizeChapter(
   const title = value.title.trim();
   if (!title) throw new Error(`LLM chapters[${index}] 标题不能为空`);
   const endMs =
-    typeof value.endMs === "number" && Number.isFinite(value.endMs) ? Math.round(value.endMs) : undefined;
+    typeof value.endMs === "number" && Number.isFinite(value.endMs)
+      ? Math.round(value.endMs)
+      : undefined;
   return {
     title,
     startMs: Math.round(value.startMs),

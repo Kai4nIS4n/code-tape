@@ -9,6 +9,10 @@ import { canonicalStringify, sha256Hex } from "@/shared/util/hash";
 import type { CloudPlaybackDescriptor, CloudRecordingRepository } from "@/features/cloud/types";
 import { createCloudPackageLoader } from "../cloudPackageLoader";
 import { buildReplayIndex } from "../replayIndex";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { SubtitlePanel } from "@/features/subtitles/SubtitlePanel";
+import type { SubtitleStore } from "@/features/subtitles/types";
+import { createElement } from "react";
 
 type DescriptorRepository = Pick<
   CloudRecordingRepository,
@@ -16,6 +20,60 @@ type DescriptorRepository = Pick<
 >;
 
 describe("createCloudPackageLoader", () => {
+  it.each([
+    { hasAudio: false, hasCamera: true },
+    { hasAudio: true, hasCamera: false },
+  ])("uses actual recorded flags instead of available devices: %j", async (flags) => {
+    const mediaBlob = new Blob(["media"], { type: "video/webm" });
+    const parts = await makePackageParts({ mediaBlob });
+    parts.meta.mediaCapability.camera = "available";
+    expect(parts.meta.mediaCapability.audio).toBe("available");
+    expect(parts.meta.mediaCapability.camera).toBe("available");
+    const loader = createCloudPackageLoader({
+      repository: makeRepository({
+        ok: true,
+        value: makeDescriptor({ ...flags, indexesUrl: null }),
+      }),
+      fetch: makeAssetFetch({
+        "https://assets.example.com/manifest.json": jsonResponse(parts.manifest),
+        "https://assets.example.com/meta.json": jsonResponse(parts.meta),
+        "https://assets.example.com/events.json": jsonResponse(parts.events),
+        "https://assets.example.com/snapshots.json": jsonResponse(parts.snapshots),
+        "https://assets.example.com/media.webm": await blobResponse(mediaBlob),
+      }),
+    });
+    const result = await loader.load("rec-1");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.package.media).toMatchObject(flags);
+    if (flags.hasAudio) return;
+    const warmUp = vi.fn(async () => undefined);
+    const store: SubtitleStore = {
+      load: async () => null,
+      save: async () => {},
+      loadChapters: async () => [],
+      saveChapters: async () => {},
+      saveWithChapters: async () => {},
+      remove: async () => {},
+    };
+    const rendered = render(
+      createElement(SubtitlePanel, {
+        recordingId: "rec-1",
+        mediaBlob: result.mediaBlob,
+        hasAudio: result.package.media!.hasAudio,
+        durationMs: 1000,
+        currentTimeMs: 0,
+        onSeek: () => {},
+        store,
+        transcriber: { warmUp, transcribe: vi.fn() },
+        postProcessor: null,
+      }),
+    );
+    fireEvent.pointerEnter(screen.getByRole("region", { name: "字幕" }));
+    expect(warmUp).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "生成字幕" })).toBeDisabled();
+    rendered.unmount();
+  });
   it("loads a ready cloud recording into a PackageLoadResult", async () => {
     const mediaBlob = new Blob(["media"], { type: "video/webm" });
     const parts = await makePackageParts({ mediaBlob, includeIndexes: true });
@@ -43,6 +101,30 @@ describe("createCloudPackageLoader", () => {
       expect(await readBlobText(result.mediaBlob!)).toBe("media");
       expect(result.warnings).toEqual([]);
     }
+  });
+
+  it("keeps legacy descriptor media playable without guessing an audio track for prewarming", async () => {
+    const mediaBlob = new Blob(["legacy media"], { type: "video/webm" });
+    const parts = await makePackageParts({ mediaBlob });
+    const loader = createCloudPackageLoader({
+      repository: makeRepository({
+        ok: true,
+        value: makeDescriptor({ hasAudio: undefined, hasCamera: undefined, indexesUrl: null }),
+      }),
+      fetch: makeAssetFetch({
+        "https://assets.example.com/manifest.json": jsonResponse(parts.manifest),
+        "https://assets.example.com/meta.json": jsonResponse(parts.meta),
+        "https://assets.example.com/events.json": jsonResponse(parts.events),
+        "https://assets.example.com/snapshots.json": jsonResponse(parts.snapshots),
+        "https://assets.example.com/media.webm": await blobResponse(mediaBlob),
+      }),
+    });
+    const result = await loader.load("rec-1");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.mediaBlob).not.toBeNull();
+    expect(await readBlobText(result.mediaBlob!)).toBe("legacy media");
+    expect(result.package.media).toMatchObject({ hasAudio: false, hasCamera: false });
   });
 
   it("uses the shared playback descriptor lookup for share links", async () => {
@@ -135,7 +217,10 @@ describe("createCloudPackageLoader", () => {
   it("loads successfully when indexesUrl is null", async () => {
     const parts = await makePackageParts({ includeIndexes: false });
     const loader = createCloudPackageLoader({
-      repository: makeRepository({ ok: true, value: makeDescriptor({ indexesUrl: null, mediaUrl: null }) }),
+      repository: makeRepository({
+        ok: true,
+        value: makeDescriptor({ indexesUrl: null, mediaUrl: null }),
+      }),
       fetch: makeAssetFetch({
         "https://assets.example.com/manifest.json": jsonResponse(parts.manifest),
         "https://assets.example.com/meta.json": jsonResponse(parts.meta),
@@ -153,7 +238,10 @@ describe("createCloudPackageLoader", () => {
   it("rebuilds a playable replay index from a descriptor that has no indexes asset", async () => {
     const parts = await makePackageParts({ includeIndexes: false });
     const loader = createCloudPackageLoader({
-      repository: makeRepository({ ok: true, value: makeDescriptor({ indexesUrl: null, mediaUrl: null }) }),
+      repository: makeRepository({
+        ok: true,
+        value: makeDescriptor({ indexesUrl: null, mediaUrl: null }),
+      }),
       fetch: makeAssetFetch({
         "https://assets.example.com/manifest.json": jsonResponse(parts.manifest),
         "https://assets.example.com/meta.json": jsonResponse(parts.meta),
@@ -179,7 +267,10 @@ describe("createCloudPackageLoader", () => {
     const expectedMedia = new Blob(["media"], { type: "video/webm" });
     const parts = await makePackageParts({ mediaBlob: expectedMedia });
     const loader = createCloudPackageLoader({
-      repository: makeRepository({ ok: true, value: makeDescriptor({ indexesUrl: null, mediaUrl: null }) }),
+      repository: makeRepository({
+        ok: true,
+        value: makeDescriptor({ indexesUrl: null, mediaUrl: null }),
+      }),
       fetch: makeAssetFetch({
         "https://assets.example.com/manifest.json": jsonResponse(parts.manifest),
         "https://assets.example.com/meta.json": jsonResponse(parts.meta),
@@ -227,7 +318,10 @@ describe("createCloudPackageLoader", () => {
     const parts = await makePackageParts();
     const changedEvent = { ...parts.events[0], timestampMs: 999 };
     const loader = createCloudPackageLoader({
-      repository: makeRepository({ ok: true, value: makeDescriptor({ indexesUrl: null, mediaUrl: null }) }),
+      repository: makeRepository({
+        ok: true,
+        value: makeDescriptor({ indexesUrl: null, mediaUrl: null }),
+      }),
       fetch: makeAssetFetch({
         "https://assets.example.com/manifest.json": jsonResponse(parts.manifest),
         "https://assets.example.com/meta.json": jsonResponse(parts.meta),
@@ -327,14 +421,15 @@ async function makePackageParts(input: { mediaBlob?: Blob; includeIndexes?: bool
       selectedCameraDeviceId: null,
     },
   };
-  const indexes: RecordingIndexes | undefined = input.includeIndexes === false
-    ? undefined
-    : {
-        generatedAt: "2026-05-29T00:01:00.000Z",
-        eventsByType: { "content-change": [1] } as RecordingIndexes["eventsByType"],
-        snapshotSeqsByTime: [1],
-        markers: [],
-      };
+  const indexes: RecordingIndexes | undefined =
+    input.includeIndexes === false
+      ? undefined
+      : {
+          generatedAt: "2026-05-29T00:01:00.000Z",
+          eventsByType: { "content-change": [1] } as RecordingIndexes["eventsByType"],
+          snapshotSeqsByTime: [1],
+          markers: [],
+        };
   return { manifest, meta, events, snapshots, indexes };
 }
 
@@ -344,6 +439,8 @@ function makeDescriptor(overrides: Partial<CloudPlaybackDescriptor> = {}): Cloud
     title: "Cloud Demo",
     durationMs: 1000,
     schemaVersion: "0.1.0",
+    hasAudio: true,
+    hasCamera: false,
     manifestUrl: "https://assets.example.com/manifest.json",
     metaUrl: "https://assets.example.com/meta.json",
     eventsUrl: "https://assets.example.com/events.json",
@@ -367,9 +464,11 @@ function makeRepository(
 
 function makeAssetFetch(responses: Record<string, Response>): typeof fetch {
   return vi.fn(async (input: RequestInfo | URL) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url =
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const response = responses[url];
-    if (!response) return new Response("missing test response", { status: 404, statusText: "Not Found" });
+    if (!response)
+      return new Response("missing test response", { status: 404, statusText: "Not Found" });
     return response;
   }) as typeof fetch;
 }

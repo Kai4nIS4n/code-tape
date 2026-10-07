@@ -53,6 +53,7 @@ export type SubtitlePanelProps = {
   contextResolver?: (startMs: number, endMs: number) => SubtitlePostProcessorContext;
   onAnchorSeek?: (anchor: SubtitleCodeAnchor) => Promise<void>;
   onCreateManualAnchor?: (segmentId: string) => Promise<SubtitleCodeAnchor | null>;
+  onResolveAnchor?: (segment: SubtitleSegment) => Promise<SubtitleCodeAnchor | null | undefined>;
 };
 
 type GenerationStatus = "idle" | "loading" | "generating" | "post-processing" | "ready" | "error";
@@ -82,6 +83,7 @@ export function SubtitlePanel({
   contextResolver,
   onAnchorSeek,
   onCreateManualAnchor,
+  onResolveAnchor,
 }: SubtitlePanelProps) {
   const store = useMemo(() => injectedStore ?? createSubtitleStore(), [injectedStore]);
   const [asrConfigVersion, setAsrConfigVersion] = useState(0);
@@ -147,7 +149,9 @@ export function SubtitlePanel({
   const timeIndex = useMemo(() => buildSubtitleTimeIndex(track?.segments ?? []), [track]);
   const activeIndex = findActiveSubtitleIndex(timeIndex, currentTimeMs);
   const virtual = useFixedVirtualList(track?.segments.length ?? 0, 72);
+  const { scrollToIndex } = virtual;
   const requestVersionRef = useRef(0);
+  const anchorRequestVersionRef = useRef(0);
   const trackRef = useRef<SubtitleTrack | null>(null);
   trackRef.current = track;
   const generationAbortRef = useRef<AbortController | null>(null);
@@ -158,6 +162,7 @@ export function SubtitlePanel({
   useEffect(() => {
     const requestVersion = requestVersionRef.current + 1;
     requestVersionRef.current = requestVersion;
+    anchorRequestVersionRef.current += 1;
     generationAbortRef.current?.abort();
     generationAbortRef.current = null;
     if (!recordingId) {
@@ -181,27 +186,42 @@ export function SubtitlePanel({
       if (store.loadAsset) {
         const asset = await store.loadAsset(recordingId);
         if (cancelled || requestVersionRef.current !== requestVersion) return;
-        setTrack(asset?.track ?? null); setChapters(asset?.chapters ?? []); setStatus(asset ? "ready" : "idle");
+        setTrack(asset?.track ?? null);
+        setChapters(asset?.chapters ?? []);
+        setStatus(asset ? "ready" : "idle");
         if (asset) {
-          const matches = asset.sourceEventsChecksum === recordingPackage?.manifest.checksums.eventsSha256 && asset.subtitleTrackRevision === (asset.track.revision ?? 0);
+          const matches =
+            asset.sourceEventsChecksum === recordingPackage?.manifest.checksums.eventsSha256 &&
+            asset.subtitleTrackRevision === (asset.track.revision ?? 0);
           setAnchors(matches ? asset.anchors : []);
-          if (!matches && asset.anchors.some((anchor) => anchor.source === "manual")) setWarnings([{ code: "invalid-anchor", message: "录制来源或字幕版本已变化，手动代码关联需要重新设置。" }]);
+          if (!matches && asset.anchors.some((anchor) => anchor.source === "manual"))
+            setWarnings([
+              {
+                code: "invalid-anchor",
+                message: "录制来源或字幕版本已变化，手动代码关联需要重新设置。",
+              },
+            ]);
         }
       } else {
         const savedTrack = await store.load(recordingId);
         if (cancelled || requestVersionRef.current !== requestVersion) return;
-        const savedChapters = savedTrack ? await store.loadChapters(recordingId).catch(() => []) : [];
+        const savedChapters = savedTrack
+          ? await store.loadChapters(recordingId).catch(() => [])
+          : [];
         if (cancelled || requestVersionRef.current !== requestVersion) return;
-        setTrack(savedTrack); setChapters(savedChapters); setStatus(savedTrack ? "ready" : "idle");
+        setTrack(savedTrack);
+        setChapters(savedChapters);
+        setStatus(savedTrack ? "ready" : "idle");
       }
-    })()
-      .catch((err) => {
-        if (cancelled || requestVersionRef.current !== requestVersion) return;
-        setError(formatSubtitleError(err));
-        setStatus("error");
-      });
+    })().catch((err) => {
+      if (cancelled || requestVersionRef.current !== requestVersion) return;
+      setError(formatSubtitleError(err));
+      setStatus("error");
+    });
     return () => {
       cancelled = true;
+      anchorRequestVersionRef.current += 1;
+      requestVersionRef.current += 1;
       generationAbortRef.current?.abort();
       generationAbortRef.current = null;
       postProcessorWarmUpRef.current = null;
@@ -210,25 +230,41 @@ export function SubtitlePanel({
   }, [postProcessor, recordingId, recordingPackage, store]);
 
   useEffect(() => {
-    virtual.scrollToIndex(activeIndex);
-  }, [activeIndex, virtual.scrollToIndex]);
+    scrollToIndex(activeIndex);
+  }, [activeIndex, scrollToIndex]);
 
   const ensureAsrWarm = useCallback(() => {
     if (!transcriber.warmUp) return Promise.resolve();
-    if (warmUpTranscriberRef.current !== transcriber) { warmUpTranscriberRef.current = transcriber; asrWarmPromiseRef.current = null; }
-    if (!asrWarmPromiseRef.current) asrWarmPromiseRef.current = transcriber.warmUp().catch((error: unknown) => { if (warmUpTranscriberRef.current === transcriber) asrWarmPromiseRef.current = null; throw error; });
+    if (warmUpTranscriberRef.current !== transcriber) {
+      warmUpTranscriberRef.current = transcriber;
+      asrWarmPromiseRef.current = null;
+    }
+    if (!asrWarmPromiseRef.current)
+      asrWarmPromiseRef.current = transcriber.warmUp().catch((error: unknown) => {
+        if (warmUpTranscriberRef.current === transcriber) asrWarmPromiseRef.current = null;
+        throw error;
+      });
     return asrWarmPromiseRef.current;
   }, [transcriber]);
 
   useEffect(() => {
-    if (!recordingId || !hasAudio || !mediaBlob || !warmUpIntent || !transcriber.warmUp) return;
+    if (!recordingId || !hasAudio || !warmUpIntent) return;
     let cancelled = false;
     const cancelIdle = scheduleIdleWarmUp(() => {
       if (cancelled) return;
       setAsrStatus("warming");
-      void ensureAsrWarm().then(() => { if (!cancelled) setAsrStatus("warm"); }).catch(() => { if (!cancelled) setAsrStatus("warm-error"); });
+      void ensureAsrWarm()
+        .then(() => {
+          if (!cancelled) setAsrStatus("warm");
+        })
+        .catch(() => {
+          if (!cancelled) setAsrStatus("warm-error");
+        });
     });
-    return () => { cancelled = true; cancelIdle(); };
+    return () => {
+      cancelled = true;
+      cancelIdle();
+    };
   }, [ensureAsrWarm, hasAudio, mediaBlob, recordingId, transcriber, warmUpIntent]);
 
   useEffect(() => {
@@ -309,10 +345,27 @@ export function SubtitlePanel({
       ? canPostProcess
       : canGenerate;
 
-  const persistTrack = async (nextTrack: SubtitleTrack, nextChapters: SubtitleChapter[], nextAnchors: SubtitleCodeAnchor[], expectedRevision: number, signal?: AbortSignal) => {
+  const persistTrack = async (
+    nextTrack: SubtitleTrack,
+    nextChapters: SubtitleChapter[],
+    nextAnchors: SubtitleCodeAnchor[],
+    expectedRevision: number,
+    signal?: AbortSignal,
+  ) => {
     const savedTrack = { ...nextTrack, revision: expectedRevision + 1 };
     if (store.saveAsset) {
-      const saved = await store.saveAsset({ recordingId: savedTrack.recordingId, sourceEventsChecksum: recordingPackage?.manifest.checksums.eventsSha256 ?? "", subtitleTrackRevision: savedTrack.revision, track: savedTrack, chapters: nextChapters, anchors: nextAnchors }, expectedRevision, signal);
+      const saved = await store.saveAsset(
+        {
+          recordingId: savedTrack.recordingId,
+          sourceEventsChecksum: recordingPackage?.manifest.checksums.eventsSha256 ?? "",
+          subtitleTrackRevision: savedTrack.revision,
+          track: savedTrack,
+          chapters: nextChapters,
+          anchors: nextAnchors,
+        },
+        expectedRevision,
+        signal,
+      );
       if (!saved) throw new Error("字幕已有较新的修改，已保留新版本。请重新加载后再优化。");
     } else await store.saveWithChapters(savedTrack, nextChapters);
     return savedTrack;
@@ -346,9 +399,28 @@ export function SubtitlePanel({
         },
       );
       if (!isCurrentGeneration(requestVersionRef, requestVersion, abortController)) return;
-      const nextChapters = result.warnings.some((warning) => warning.code === "invalid-chapter") ? previousChapters : result.chapters;
-      const savedTrack = await persistTrack(result.track, nextChapters, baseAnchors, baseTrack.revision ?? 0, abortController.signal);
+      const textChanged = result.track.segments.some(
+        (segment, index) => segment.text !== baseTrack.segments[index]?.text,
+      );
+      if (!textChanged && result.chapters.length === 0) {
+        setWarnings(result.warnings);
+        setStatus("ready");
+        return;
+      }
+      const nextChapters =
+        result.warnings.some((warning) => warning.code === "invalid-chapter") ||
+        !result.chapters.length
+          ? previousChapters
+          : result.chapters;
+      const savedTrack = await persistTrack(
+        result.track,
+        nextChapters,
+        baseAnchors,
+        baseTrack.revision ?? 0,
+        abortController.signal,
+      );
       if (!isCurrentGeneration(requestVersionRef, requestVersion, abortController)) return;
+      trackRef.current = savedTrack;
       setTrack(savedTrack);
       setChapters(nextChapters);
       setWarnings(result.warnings);
@@ -396,9 +468,17 @@ export function SubtitlePanel({
         generatedAt: new Date().toISOString(),
         ...draft,
       };
-      const nextAnchors = recordingPackage ? await buildSubtitleCodeAnchors(recordingPackage, nextTrack) : [];
+      const nextAnchors = recordingPackage
+        ? await buildSubtitleCodeAnchors(recordingPackage, nextTrack)
+        : [];
       if (!isCurrentGeneration(requestVersionRef, requestVersion, abortController)) return;
-      const savedTrack = await persistTrack(nextTrack, [], nextAnchors, trackRef.current?.revision ?? 0, abortController.signal);
+      const savedTrack = await persistTrack(
+        nextTrack,
+        [],
+        nextAnchors,
+        trackRef.current?.revision ?? 0,
+        abortController.signal,
+      );
       if (!isCurrentGeneration(requestVersionRef, requestVersion, abortController)) return;
       trackRef.current = savedTrack;
       setTrack(savedTrack);
@@ -451,44 +531,137 @@ export function SubtitlePanel({
     void generateSubtitles();
   };
   const selectSegment = (segment: SubtitleSegment) => {
-    setSelectedSegmentId(segment.id); setDraftText(segment.text); setDraftStartMs(segment.startMs);
+    const anchorRequest = ++anchorRequestVersionRef.current;
+    setSelectedSegmentId(segment.id);
+    setDraftText(segment.text);
+    setDraftStartMs(segment.startMs);
     const anchor = anchors.find((candidate) => candidate.segmentId === segment.id);
     if (anchor && onAnchorSeek) void onAnchorSeek(anchor);
+    else if (onResolveAnchor && onAnchorSeek)
+      void onResolveAnchor(segment)
+        .then((resolved) => {
+          if (anchorRequest !== anchorRequestVersionRef.current) return;
+          if (resolved === undefined) return;
+          if (resolved) {
+            setAnchors((current) => [
+              ...current.filter((item) => item.segmentId !== segment.id),
+              resolved,
+            ]);
+            void onAnchorSeek(resolved);
+          } else onSeek(segment.startMs);
+        })
+        .catch(() => {
+          if (anchorRequest === anchorRequestVersionRef.current) onSeek(segment.startMs);
+        });
     else onSeek(segment.startMs);
   };
   const saveManualEdit = async () => {
-    if (!track || !selectedSegmentId || !draftText.trim() || draftText.length > 4_000 || !Number.isFinite(draftStartMs)) return;
-    const original = track.segments.find((segment) => segment.id === selectedSegmentId);
-    if (!original || draftStartMs < 0 || draftStartMs >= original.endMs) { setError("字幕开始时间必须在该段结束之前。"); return; }
-    generationAbortRef.current?.abort(); requestVersionRef.current += 1;
+    const baseTrack = trackRef.current;
+    if (
+      !baseTrack ||
+      !selectedSegmentId ||
+      !draftText.trim() ||
+      draftText.length > 4_000 ||
+      !Number.isFinite(draftStartMs)
+    )
+      return;
+    const original = baseTrack.segments.find((segment) => segment.id === selectedSegmentId);
+    if (!original || draftStartMs < 0 || draftStartMs >= original.endMs) {
+      setError("字幕开始时间必须在该段结束之前。");
+      return;
+    }
+    generationAbortRef.current?.abort();
+    requestVersionRef.current += 1;
+    anchorRequestVersionRef.current += 1;
+    setStatus("ready");
     const version = requestVersionRef.current;
-    const next = { ...track, segments: track.segments.map((segment) => segment.id === selectedSegmentId ? { ...segment, text: draftText.trim(), startMs: draftStartMs } : segment) };
-    const nextAnchors = original.startMs !== draftStartMs && recordingPackage ? await buildSubtitleCodeAnchors(recordingPackage, next) : anchors;
-    if (requestVersionRef.current !== version) return;
+    const controller = new AbortController();
+    generationAbortRef.current = controller;
     try {
-      const saved = await persistTrack(next, chapters, nextAnchors, track.revision ?? 0);
+      const next = {
+        ...baseTrack,
+        segments: baseTrack.segments.map((segment) =>
+          segment.id === selectedSegmentId
+            ? { ...segment, text: draftText.trim(), startMs: draftStartMs }
+            : segment,
+        ),
+      };
+      const automaticAnchors =
+        original.startMs !== draftStartMs && recordingPackage
+          ? await buildSubtitleCodeAnchors(recordingPackage, next)
+          : anchors;
+      const preservedManual = anchors.filter(
+        (anchor) => anchor.source === "manual" && anchor.segmentId !== selectedSegmentId,
+      );
+      const manualIds = new Set(preservedManual.map((anchor) => anchor.segmentId));
+      const nextAnchors = [
+        ...automaticAnchors.filter((anchor) => !manualIds.has(anchor.segmentId)),
+        ...preservedManual,
+      ];
       if (requestVersionRef.current !== version) return;
-      setTrack(saved); setAnchors(nextAnchors); setStatus("ready"); setError(null);
-    } catch (error) { if (requestVersionRef.current === version) setError(formatSubtitleError(error)); }
+      const saved = await persistTrack(
+        next,
+        chapters,
+        nextAnchors,
+        baseTrack.revision ?? 0,
+        controller.signal,
+      );
+      if (requestVersionRef.current !== version) return;
+      trackRef.current = saved;
+      setTrack(saved);
+      setAnchors(nextAnchors);
+      setStatus("ready");
+      setError(null);
+    } catch (error) {
+      if (requestVersionRef.current === version) setError(formatSubtitleError(error));
+    } finally {
+      if (generationAbortRef.current === controller) generationAbortRef.current = null;
+    }
   };
   const saveManualAnchor = async () => {
     if (!track || !selectedSegmentId || !onCreateManualAnchor) return;
     const version = ++requestVersionRef.current;
     generationAbortRef.current?.abort();
+    anchorRequestVersionRef.current += 1;
+    setStatus("ready");
+    const controller = new AbortController();
+    generationAbortRef.current = controller;
     const anchor = await onCreateManualAnchor(selectedSegmentId);
     if (requestVersionRef.current !== version) return;
-    if (!anchor) { setError("当前历史状态没有有效光标或选区，无法关联。"); return; }
+    if (!anchor) {
+      setError("当前历史状态没有有效光标或选区，无法关联。");
+      return;
+    }
     const nextAnchors = [...anchors.filter((item) => item.segmentId !== selectedSegmentId), anchor];
     try {
-      const saved = await persistTrack(track, chapters, nextAnchors, track.revision ?? 0);
+      const saved = await persistTrack(
+        track,
+        chapters,
+        nextAnchors,
+        track.revision ?? 0,
+        controller.signal,
+      );
       if (requestVersionRef.current !== version) return;
-      setTrack(saved); setAnchors(nextAnchors); setStatus("ready"); setError(null);
-    } catch (error) { if (requestVersionRef.current === version) setError(formatSubtitleError(error)); }
+      trackRef.current = saved;
+      setTrack(saved);
+      setAnchors(nextAnchors);
+      setStatus("ready");
+      setError(null);
+    } catch (error) {
+      if (requestVersionRef.current === version) setError(formatSubtitleError(error));
+    } finally {
+      if (generationAbortRef.current === controller) generationAbortRef.current = null;
+    }
   };
   const statusMessage = formatAsrStatusMessage(status, asrStatus);
 
   return (
-    <section aria-label="字幕" onPointerEnter={() => setWarmUpIntent(true)} onFocus={() => setWarmUpIntent(true)} className="shrink-0 border-t border-border bg-background px-3 py-2">
+    <section
+      aria-label="字幕"
+      onPointerEnter={() => setWarmUpIntent(true)}
+      onFocus={() => setWarmUpIntent(true)}
+      className="shrink-0 border-t border-border bg-background px-3 py-2"
+    >
       <div className="mb-2 flex min-h-9 flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-foreground">
           <Captions aria-hidden size={17} className="shrink-0 text-primary" />
@@ -520,7 +693,19 @@ export function SubtitlePanel({
             )}
             <span>{primaryActionLabel}</span>
           </button>
-          {status === "generating" || status === "post-processing" ? <button type="button" className={buttonClassName} onClick={() => { generationAbortRef.current?.abort(); requestVersionRef.current += 1; setStatus(track ? "ready" : "idle"); }}>取消</button> : null}
+          {status === "generating" || status === "post-processing" ? (
+            <button
+              type="button"
+              className={buttonClassName}
+              onClick={() => {
+                generationAbortRef.current?.abort();
+                requestVersionRef.current += 1;
+                setStatus(track ? "ready" : "idle");
+              }}
+            >
+              取消
+            </button>
+          ) : null}
         </div>
       </div>
       {error ? (
@@ -539,42 +724,87 @@ export function SubtitlePanel({
       ) : track && track.segments.length > 0 ? (
         <>
           <SubtitleChapterList chapters={chapters} currentTimeMs={currentTimeMs} onSeek={onSeek} />
-          <div ref={virtual.containerRef} data-testid="subtitle-viewport" onScroll={virtual.onScroll} className="relative h-36 min-h-0 overflow-y-auto overscroll-contain pr-1">
+          <div
+            ref={virtual.containerRef}
+            data-testid="subtitle-viewport"
+            onScroll={virtual.onScroll}
+            className="relative h-36 min-h-0 overflow-y-auto overscroll-contain pr-1"
+          >
             <div style={{ height: virtual.totalHeight, position: "relative" }}>
-            {track.segments.slice(virtual.start, virtual.end).map((segment, offset) => {
-              const index = virtual.start + offset;
-              const isActive = activeIndex === index;
-              return (
-                <button
-                  key={segment.id}
-                  data-testid="subtitle-row"
-                  style={{ position: "absolute", top: index * 72, height: 72, left: 0, right: 0 }}
-                  type="button"
-                  aria-current={isActive ? "true" : undefined}
-                  aria-label={segment.text}
-                  onClick={() => selectSegment(segment)}
-                  className={cn(
-                    "grid grid-cols-[4.5rem_1fr] gap-2 rounded-md px-2 py-1.5 text-left text-xs leading-5",
-                    "transition-[background-color,color] duration-150 ease-out-soft",
-                    "hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus",
-                    isActive ? "bg-surface-raised text-foreground" : "text-muted",
-                  )}
-                >
-                  <span className="font-mono tabular-nums">
-                    {formatSubtitleTime(segment.startMs)}
-                  </span>
-                  <span className="line-clamp-2 text-foreground">{segment.text}</span>
-                </button>
-              );
-            })}
+              {track.segments.slice(virtual.start, virtual.end).map((segment, offset) => {
+                const index = virtual.start + offset;
+                const isActive = activeIndex === index;
+                return (
+                  <button
+                    key={segment.id}
+                    data-testid="subtitle-row"
+                    style={{ position: "absolute", top: index * 72, height: 72, left: 0, right: 0 }}
+                    type="button"
+                    aria-current={isActive ? "true" : undefined}
+                    aria-label={segment.text}
+                    onClick={() => selectSegment(segment)}
+                    className={cn(
+                      "grid grid-cols-[4.5rem_1fr] gap-2 rounded-md px-2 py-1.5 text-left text-xs leading-5",
+                      "transition-[background-color,color] duration-150 ease-out-soft",
+                      "hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus",
+                      isActive ? "bg-surface-raised text-foreground" : "text-muted",
+                    )}
+                  >
+                    <span className="font-mono tabular-nums">
+                      {formatSubtitleTime(segment.startMs)}
+                    </span>
+                    <span className="line-clamp-2 text-foreground">{segment.text}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
-          {selectedSegmentId ? <div className="mt-2 flex flex-wrap items-end gap-2 border-t border-border pt-2">
-            <label className="min-w-48 flex-1 text-xs">完整字幕<textarea aria-label="编辑完整字幕" value={draftText} onChange={(event) => setDraftText(event.target.value)} maxLength={4_000} className="mt-1 block w-full rounded border border-border bg-surface p-2" /></label>
-            <label className="text-xs">开始时间（毫秒）<input aria-label="字幕开始时间" type="number" min={0} value={draftStartMs} onChange={(event) => setDraftStartMs(Number(event.target.value))} className="mt-1 block w-28 rounded border border-border bg-surface p-1" /></label>
-            <button type="button" className={buttonClassName} onClick={() => void saveManualEdit()}>保存字幕</button>
-            {onCreateManualAnchor ? <button type="button" className={buttonClassName} onClick={() => void saveManualAnchor()}>关联当前代码位置</button> : null}
-          </div> : null}
+          {selectedSegmentId ? (
+            <div className="mt-2 flex flex-wrap items-end gap-2 border-t border-border pt-2">
+              <label className="min-w-48 flex-1 text-xs">
+                完整字幕
+                <textarea
+                  aria-label="编辑完整字幕"
+                  value={draftText}
+                  onChange={(event) => setDraftText(event.target.value)}
+                  maxLength={4_000}
+                  className="mt-1 block w-full rounded border border-border bg-surface p-2"
+                />
+              </label>
+              <label className="text-xs">
+                开始时间（毫秒）
+                <input
+                  aria-label="字幕开始时间"
+                  type="number"
+                  min={0}
+                  value={draftStartMs}
+                  onChange={(event) => setDraftStartMs(Number(event.target.value))}
+                  className="mt-1 block w-28 rounded border border-border bg-surface p-1"
+                />
+              </label>
+              <button
+                type="button"
+                className={buttonClassName}
+                onClick={() => void saveManualEdit()}
+              >
+                保存字幕
+              </button>
+              {onCreateManualAnchor ? (
+                <button
+                  type="button"
+                  className={buttonClassName}
+                  onClick={() => void saveManualAnchor()}
+                >
+                  关联当前代码选区
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+          {onCreateManualAnchor ? (
+            <span className="text-xs text-muted">
+              关联 {formatSubtitleTime(currentTimeMs)} 的当前代码选区，保存时暂停回放。
+            </span>
+          ) : null}
         </>
       ) : status === "generating" || status === "post-processing" ? null : (
         <p className="text-xs text-muted">暂无字幕</p>

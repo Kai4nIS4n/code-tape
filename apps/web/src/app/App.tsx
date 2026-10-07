@@ -8,7 +8,16 @@ export function App() {
   return (
     <ThemeProvider>
       <TooltipProvider>
-        <AuthProvider><RouterProvider router={router} /></AuthProvider>
+        <AuthProvider>
+          <RouterProvider
+            router={router}
+            fallbackElement={
+              <div role="status" className="p-6 text-sm text-muted">
+                正在加载工作台…
+              </div>
+            }
+          />
+        </AuthProvider>
       </TooltipProvider>
     </ThemeProvider>
   );

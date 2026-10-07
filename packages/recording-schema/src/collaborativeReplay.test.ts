@@ -4,9 +4,15 @@ import { buildInitialReplayStateFromRecordStart, replayReducer } from "./replayS
 import { verifyRecordingPackageIntegrity } from "./integrity.js";
 import { canonicalStringify, sha256Hex } from "./hash.js";
 import type { RecordingEvent, RecordingPackageV1, RecordStartPayload } from "./types.js";
+import { assertEventSeqInvariants } from "./validators.js";
 
 const start: RecordStartPayload = { initialLanguage: "javascript", initialTheme: "dark", initialFontSize: 14, selectedAudioDeviceId: null, selectedCameraDeviceId: null, mediaCapability: { audio: "unsupported", camera: "unsupported", selectedAudioDeviceId: null, selectedCameraDeviceId: null } };
 const content: Extract<RecordingEvent, { type: "content-change" }> = { id: "edit", seq: 1, timestampMs: 10, source: "editor", track: "main", type: "content-change", payload: { fileId: "main", documentId: "source:html", version: 1, code: "<h1>Hello</h1>", language: "html", contentHash: "hash", changeReason: "input", changeCount: 1, flushedBy: "debounce" } };
+
+test("events permit time ties but reject decreasing time for binary timeline indexes", () => {
+  assert.equal(assertEventSeqInvariants([content, { ...content, seq: 2 }]).ok, true);
+  assert.equal(assertEventSeqInvariants([content, { ...content, seq: 2, timestampMs: 9 }]).ok, false);
+});
 
 test("inactive shared document and delayed view events do not switch the recorded view", () => {
   const initial = buildInitialReplayStateFromRecordStart(start);

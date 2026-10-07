@@ -81,11 +81,27 @@ export function AppShell() {
         <span className="flex-1" />
         {auth.user ? (
           <div className="flex items-center gap-2 text-xs">
-            <span className="max-w-28 truncate" title={auth.user.username}>{auth.user.displayName}</span>
-            <button type="button" onClick={() => void auth.client.logout().catch(() => undefined)} className="rounded-md px-2 py-1 text-muted hover:bg-surface-raised">退出</button>
+            <span className="max-w-28 truncate" title={auth.user.username}>
+              {auth.user.displayName}
+            </span>
+            <button
+              type="button"
+              onClick={() => void auth.client.logout().catch(() => undefined)}
+              className="rounded-md px-2 py-1 text-muted hover:bg-surface-raised"
+            >
+              退出
+            </button>
           </div>
-        ) : <NavLink to="/login" className="rounded-md px-2 py-1 text-xs text-primary">{auth.status === "loading" ? "恢复账号…" : "登录"}</NavLink>}
-        {auth.error && <span role="alert" className="max-w-48 truncate text-xs text-red-400" title={auth.error}>{auth.error}</span>}
+        ) : (
+          <NavLink to="/login" className="rounded-md px-2 py-1 text-xs text-primary">
+            {auth.status === "loading" ? "恢复账号…" : "登录"}
+          </NavLink>
+        )}
+        {auth.error && (
+          <span role="alert" className="max-w-48 truncate text-xs text-red-400" title={auth.error}>
+            {auth.error}
+          </span>
+        )}
         <Tooltip content="打开 GitHub 仓库">
           <a
             href={GITHUB_REPOSITORY_URL}

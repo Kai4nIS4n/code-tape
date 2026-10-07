@@ -77,6 +77,32 @@ function createMockWorker() {
 }
 
 describe("createWorkerBackedHuggingFaceSubtitlePostProcessor", () => {
+  it("reuses one in-flight warm-up promise and retries after model initialization fails", async () => {
+    const worker = createMockWorker();
+    const processor = createWorkerBackedHuggingFaceSubtitlePostProcessor({
+      workerFactory: () => worker as unknown as Worker,
+    });
+    const first = processor.warmUp!();
+    const second = processor.warmUp!();
+    const failure = Promise.allSettled([first, second]);
+    await flushPromises();
+    expect(worker.postMessage).toHaveBeenCalledTimes(1);
+    const request = worker.postMessage.mock.calls[0][0] as { id: string };
+    worker.dispatch({
+      id: request.id,
+      type: "error",
+      error: { name: "Error", message: "Model initialization failed" },
+    });
+    expect((await failure).every((result) => result.status === "rejected")).toBe(true);
+    const retry = processor.warmUp!();
+    await flushPromises();
+    const retryRequest = worker.postMessage.mock.calls[1][0] as { id: string };
+    worker.dispatch({ id: retryRequest.id, type: "success" });
+    await retry;
+    await processor.warmUp!();
+    expect(worker.postMessage).toHaveBeenCalledTimes(2);
+    processor.dispose!();
+  });
   it("runs subtitle post-processing through a browser worker", async () => {
     const worker = createMockWorker();
     const onMetric = vi.fn();
@@ -138,7 +164,9 @@ describe("createWorkerBackedHuggingFaceSubtitlePostProcessor", () => {
       onMetric,
     });
 
-    await expect(postProcessor.process({ track: makeTrack() })).rejects.toThrow("worker bootstrap failed");
+    await expect(postProcessor.process({ track: makeTrack() })).rejects.toThrow(
+      "worker bootstrap failed",
+    );
 
     expect(workerFactory).toHaveBeenCalledTimes(1);
     expect(onMetric).toHaveBeenCalledWith(
@@ -192,8 +220,7 @@ describe("createWorkerBackedHuggingFaceSubtitlePostProcessor", () => {
     const promise = postProcessor.process({ track: makeTrack() });
     await flushPromises();
     const request = worker.postMessage.mock.calls[0]?.[0] as { id: string };
-    const message =
-      "当前浏览器无法加载本地字幕 LLM 模型（wasm/q8）。原始错误：Failed to fetch";
+    const message = "当前浏览器无法加载本地字幕 LLM 模型（wasm/q8）。原始错误：Failed to fetch";
 
     worker.dispatch({
       id: request.id,

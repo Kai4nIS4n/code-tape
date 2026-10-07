@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Navigate, useParams } from "react-router-dom";
+import { Link, Navigate, useParams } from "react-router-dom";
 import {
   Check,
   CircleDot,
@@ -15,8 +15,11 @@ import {
   VideoOff,
 } from "lucide-react";
 import { routerBasename } from "@/app/routerBase";
+import { authClient } from "@/features/auth/authClient";
 import { RecorderPage } from "@/features/recorder/RecorderPage";
 import { useCollaborationRoom } from "@/features/collaboration/useCollaborationRoom";
+import { featureFlags } from "@/shared/featureFlags";
+import { LocalCollaborationDrafts } from "@/features/collaboration/LocalCollaborationDrafts";
 import type { EventBus } from "@/shared/recording-schema";
 import { Toggle, Tooltip } from "@/shared/ui";
 import {
@@ -33,6 +36,7 @@ import {
 import { INITIAL_REMOTE_INTERVIEW_STABLE_STATE } from "./remoteInterviewInitialState";
 import {
   createInterviewRoomClient,
+  createInterviewRoomInvite,
   type InterviewRoomClient,
   type InterviewRoomStatus,
 } from "./interviewRoomClient";
@@ -134,7 +138,11 @@ export function CandidateInterviewPage({ deps = {} }: CandidateInterviewPageProp
       roomState={session.roomState}
       mediaState={session.mediaState}
       onEndInterview={session.endInterview}
-      recordingWorkspace={collaboration.session ? <RecorderPage key={session.roomId} collaboration={collaboration.session} onEventBusReady={session.onEventBusReady} /> : <p className="p-6 text-sm text-muted">{collaboration.error ?? "正在加载协同工作区…"}</p>}
+      recordingWorkspace={featureFlags.collaboration && collaboration.session ? <RecorderPage key={session.roomId} collaboration={collaboration.session} onEventBusReady={session.onEventBusReady} /> : !featureFlags.collaboration && session.roomId && collaboration.role === "candidate" ? <RecorderPage key={session.roomId} onEventBusReady={session.onEventBusReady} /> : <div className="p-6 text-sm text-muted">
+        <p>{collaboration.error ?? (session.roomState.status === "failed" ? "协同工作区暂不可用，可以继续本地录制。" : "正在加载协同工作区…")}</p>
+        <Link to="/record" className="mt-3 inline-block text-primary underline">继续本地录制</Link>
+        {session.roomId ?? roomId ? <LocalCollaborationDrafts roomId={(session.roomId ?? roomId)!} /> : null}
+      </div>}
     />
   );
 }
@@ -218,6 +226,7 @@ function useCandidateInterviewRoomSession({
       roomId: context.roomId,
       sessionId: context.sessionId,
       snapshotState: INITIAL_REMOTE_INTERVIEW_STABLE_STATE,
+      beforeSnapshot: () => recorderEventBusRef.current?.flushPending?.(),
     });
     realtimePublisherRef.current = publisher;
     unsubscribeRealtimePublisherRef.current = publisher.subscribeTo(bus, {
@@ -232,7 +241,6 @@ function useCandidateInterviewRoomSession({
     const handleSnapshotRequest = (event: { data: unknown }) => {
       const request = parseSnapshotRequestMessage(event.data);
       if (!request || request.roomId !== context.roomId) return;
-      recorderEventBusRef.current?.flushPending?.();
       realtimePublisherRef.current?.publishSnapshot();
     };
     handleSnapshotRequestMessageRef.current = handleSnapshotRequest;
@@ -682,10 +690,9 @@ function useCandidateInterviewRoomSession({
 function initialCandidateRoomState(routeRoomId: string | null): CandidateInterviewRoomState {
   return routeRoomId
     ? {
-        status: "waiting-interviewer",
+        status: "creating-room",
         joinCode: null,
         interviewerOnline: false,
-        errorMessage: "缺少 joinCode，当前仅展示候选人录制工作区",
       }
     : {
         status: "idle",
@@ -729,12 +736,42 @@ export function CandidateInterviewView({
   const cameraLabel = mediaState.cameraEnabled ? "摄像头已开启" : "摄像头已关闭";
   const canEndInterview = CANDIDATE_ACTIVE_STATUSES.has(roomState.status);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const [invite, setInvite] = useState<{
+    roomId: string | null;
+    joinCode?: string;
+    pending: boolean;
+    error?: string;
+  }>({ roomId: null, pending: false });
+  const inviteGeneration = useRef(0);
+  useEffect(() => () => {
+    inviteGeneration.current += 1;
+  }, [roomId]);
+  const displayedJoinCode = invite.roomId === roomId
+    ? invite.joinCode ?? roomState.joinCode
+    : roomState.joinCode;
+  const renewInvite = async () => {
+    if (!roomId) return;
+    const generation = ++inviteGeneration.current;
+    const epoch = authClient.epoch;
+    setInvite((current) => ({
+      roomId,
+      joinCode: current.roomId === roomId ? current.joinCode : undefined,
+      pending: true,
+    }));
+    const result = await createInterviewRoomInvite(roomId);
+    if (generation !== inviteGeneration.current || epoch !== authClient.epoch) return;
+    setInvite((current) =>
+      result.ok
+        ? { roomId, joinCode: result.value.joinCode, pending: false }
+        : { ...current, roomId, pending: false, error: result.error.message },
+    );
+  };
   const interviewerUrl = useMemo(
     () =>
-      roomId && roomState.joinCode
-        ? buildInterviewerRoomUrl(roomId, roomState.joinCode)
+      roomId && displayedJoinCode
+        ? buildInterviewerRoomUrl(roomId, displayedJoinCode)
         : null,
-    [roomId, roomState.joinCode],
+    [roomId, displayedJoinCode],
   );
   const clipboardAvailable =
     typeof navigator !== "undefined" && typeof navigator.clipboard?.writeText === "function";
@@ -774,7 +811,7 @@ export function CandidateInterviewView({
               {roomId ?? "等待创建"}
             </span>
             <span>joinCode</span>
-            <span className="font-mono text-foreground">{roomState.joinCode ?? "等待创建"}</span>
+            <span className="font-mono text-foreground">{displayedJoinCode || (roomId ? "邀请仅本次显示，刷新后可重新生成" : "等待创建")}</span>
           </div>
         </div>
         <button
@@ -786,6 +823,15 @@ export function CandidateInterviewView({
           <CopyIcon aria-hidden size={16} />
           {copyLabel}
         </button>
+        <button
+          type="button"
+          onClick={() => { void renewInvite(); }}
+          disabled={!roomId || roomState.status === "completed" || roomState.status === "ending" || (invite.roomId === roomId && invite.pending)}
+          className="rounded-md border border-border px-3 py-2 text-sm transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {invite.roomId === roomId && invite.pending ? "生成中…" : "重新生成邀请"}
+        </button>
+        {invite.roomId === roomId && invite.error ? <span role="alert" className="text-sm text-danger">{invite.error}</span> : null}
         <button
           type="button"
           onClick={onEndInterview}

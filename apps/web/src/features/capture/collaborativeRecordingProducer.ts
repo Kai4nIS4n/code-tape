@@ -1,6 +1,6 @@
 import type * as Y from "yjs";
 import { RECORDING_LANGUAGES, buildInitialReplayStateFromRecordStart, replayReducer } from "@/shared/recording-schema";
-import type { ContentChangePayload, EventBus, RecordingClock, RecordingLanguage, ReplayStableState } from "@/shared/recording-schema";
+import type { ContentChangePayload, EventBus, RecordingClock, RecordingEditorDocuments, RecordingLanguage, RecordingScriptLanguage, ReplayStableState } from "@/shared/recording-schema";
 import type { CollaborationSession } from "@/features/collaboration/collaborationSession";
 import { REMOTE_COLLABORATION_ORIGIN } from "@/features/collaboration/collaborationSession";
 
@@ -9,6 +9,8 @@ export function createCollaborativeRecordingProducer(deps: {
   bus: EventBus;
   clock: RecordingClock;
   getCurrentLanguage(): RecordingLanguage;
+  getCurrentViewDocuments?(): RecordingEditorDocuments;
+  getActiveScriptLanguage?(): RecordingScriptLanguage;
 }) {
   type Pending = { code: string; count: number; origin: ContentChangePayload["origin"]; debounce: ReturnType<typeof setTimeout>; maximum: ReturnType<typeof setTimeout> };
   const pending = new Map<RecordingLanguage, Pending>();
@@ -63,15 +65,15 @@ export function createCollaborativeRecordingProducer(deps: {
       if (disposed) return;
       active = true;
       const documents = deps.session.getDocuments();
-      if (pausedDocuments && RECORDING_LANGUAGES.some((language) => documents[language] !== pausedDocuments![language])) {
+      if (pausedDocuments) {
         const start = deps.bus.peek().find((event) => event.type === "record-start");
         if (start?.type === "record-start") {
-          let state: ReplayStableState = deps.bus.peek().reduce(replayReducer, buildInitialReplayStateFromRecordStart(start.payload));
-          const nextDocuments = { ...state.editor.documents! };
+          const state: ReplayStableState = deps.bus.peek().reduce(replayReducer, buildInitialReplayStateFromRecordStart(start.payload));
+          const nextDocuments = { ...(deps.getCurrentViewDocuments?.() ?? state.editor.documents!) };
           for (const language of RECORDING_LANGUAGES) nextDocuments[language] = { ...nextDocuments[language], code: documents[language] };
           const language = deps.getCurrentLanguage();
-          state = { ...state, editor: { ...state.editor, documents: nextDocuments, language, activeDocumentId: `source:${language}`, code: documents[language] } };
-          deps.bus.emit({ type: "resume-baseline", source: "recorder", track: "main", payload: { reason: "paused-state-changed", snapshot: state } });
+          const nextState: ReplayStableState = { ...state, editor: { ...state.editor, ...nextDocuments[language], documents: nextDocuments, language, activeDocumentId: `source:${language}`, activeScriptLanguage: deps.getActiveScriptLanguage?.() ?? (language === "javascript" || language === "typescript" ? language : state.editor.activeScriptLanguage) } };
+          if (JSON.stringify(nextState) !== JSON.stringify(state)) deps.bus.emit({ type: "resume-baseline", source: "recorder", track: "main", payload: { reason: "paused-state-changed", snapshot: nextState } });
         }
       }
       pausedDocuments = null;

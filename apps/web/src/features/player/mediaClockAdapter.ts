@@ -7,7 +7,11 @@ import type {
 export type MediaClockAdapterOptions = {
   segments: MediaTimelineSegment[];
   /** Seek the underlying HTMLMediaElement; receives mediaTime in ms. */
-  seekHandler?: (segment: MediaTimelineSegment, mediaTimeMs: number, signal?: AbortSignal) => Promise<void> | void;
+  seekHandler?: (
+    segment: MediaTimelineSegment,
+    mediaTimeMs: number,
+    signal?: AbortSignal,
+  ) => Promise<void> | void;
   /** Adjust playback rate of the underlying HTMLMediaElement. */
   rateHandler?: (rate: number) => void;
   /** Read the underlying HTMLMediaElement currentTime in seconds. */
@@ -34,7 +38,9 @@ export type ReplayMediaClockAdapter = MediaClockAdapter & {
  * accepts multiple segments so a future "concat pause islands" optimization
  * doesn't require an interface bump.
  */
-export function createMediaClockAdapter(options: MediaClockAdapterOptions): ReplayMediaClockAdapter {
+export function createMediaClockAdapter(
+  options: MediaClockAdapterOptions,
+): ReplayMediaClockAdapter {
   const segments = options.segments.slice().sort((a, b) => a.timelineStartMs - b.timelineStartMs);
   let seekGeneration = 0;
   let seekAbort: AbortController | null = null;
@@ -62,8 +68,11 @@ export function createMediaClockAdapter(options: MediaClockAdapterOptions): Repl
     seekAbort?.abort();
     const controller = new AbortController();
     seekAbort = controller;
-    try { await options.seekHandler?.(segment, mediaTimeMs, controller.signal); }
-    finally { if (seekAbort === controller) seekAbort = null; }
+    try {
+      await options.seekHandler?.(segment, mediaTimeMs, controller.signal);
+    } finally {
+      if (seekAbort === controller) seekAbort = null;
+    }
   };
 
   return {

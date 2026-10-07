@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createSnapshotBuilder } from "../snapshotBuilder";
 import type { RecordingEvent, RecordStartPayload } from "@/shared/recording-schema";
+import { createEventBus } from "../eventBus";
+import { createRecordingClock } from "../recordingClock";
 
 const START_PAYLOAD: RecordStartPayload = {
   initialLanguage: "javascript",
@@ -48,6 +50,34 @@ function content(seq: number, timestampMs: number): RecordingEvent {
 }
 
 describe("createSnapshotBuilder", () => {
+  it("flushes dirty documents at a microtask boundary without delivering higher seq before the triggering event", async () => {
+    let now = 0, dirty = false;
+    const clock = createRecordingClock({ nowProvider: () => now }); clock.start();
+    const bus = createEventBus({ clock });
+    const builder = createSnapshotBuilder({ beforeCapture: () => {
+      if (!dirty) return; dirty = false;
+      for (const [language, code] of [["javascript", "latest JS"], ["html", "latest HTML"]] as const) bus.emit({ type: "content-change", source: "editor", track: "main", payload: { fileId: "main", documentId: `source:${language}`, language, code, version: 1, contentHash: "hash", changeReason: "programmatic", changeCount: 1, flushedBy: "snapshot" } });
+    } });
+    bus.subscribe((event) => builder.apply(event));
+    const observed: number[] = []; bus.subscribe((event) => observed.push(event.seq));
+    bus.emit({ type: "record-start", source: "recorder", track: "main", payload: START_PAYLOAD });
+    await Promise.resolve();
+    dirty = true; now = 5000;
+    bus.emit({ type: "selection-change", source: "editor", track: "main", payload: { documentId: "source:javascript", cursor: null, selection: null } });
+    expect(observed).toEqual([1, 2]);
+    await Promise.resolve();
+    expect(observed).toEqual([1, 2, 3, 4]);
+    expect(builder.getSnapshots()).toHaveLength(2);
+    expect(builder.getSnapshots().at(-1)).toMatchObject({ eventSeq: 4, timestampMs: 5000, state: { editor: { language: "javascript", code: "latest JS", documents: { html: { code: "latest HTML" } } } } });
+  });
+
+  it("cancels a scheduled capture when the recording is reset", async () => {
+    const builder = createSnapshotBuilder({ beforeCapture: () => {} });
+    builder.apply(event(1, 0, "record-start", START_PAYLOAD));
+    builder.reset(); await Promise.resolve();
+    expect(builder.getSnapshots()).toEqual([]);
+  });
+
   it("captures initial, periodic, stable-count, semantic, and final inclusive snapshots", () => {
     const builder = createSnapshotBuilder();
 

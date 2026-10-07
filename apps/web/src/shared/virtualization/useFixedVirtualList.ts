@@ -7,8 +7,12 @@ export function useFixedVirtualList(count: number, rowHeight: number, overscan =
   const [viewport, setViewport] = useState({ top: 0, height: rowHeight * 4 });
   const measure = useCallback(() => {
     const element = containerRef.current;
-    if (element) setViewport({ top: element.scrollTop, height: element.clientHeight || rowHeight * 4 });
-  }, [rowHeight]);
+    if (element) {
+      const height = element.clientHeight || rowHeight * 4;
+      element.scrollTop = Math.max(0, Math.min(element.scrollTop, count * rowHeight - height));
+      setViewport({ top: element.scrollTop, height });
+    }
+  }, [count, rowHeight]);
   useEffect(() => {
     measure();
     const element = containerRef.current;
@@ -17,8 +21,9 @@ export function useFixedVirtualList(count: number, rowHeight: number, overscan =
     return () => {
       observer?.disconnect();
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
     };
-  }, [measure]);
+  }, [count, measure]);
   const onScroll = useCallback(() => {
     if (frameRef.current !== null) return;
     frameRef.current = requestAnimationFrame(() => {
@@ -26,17 +31,32 @@ export function useFixedVirtualList(count: number, rowHeight: number, overscan =
       measure();
     });
   }, [measure]);
-  const scrollToIndex = useCallback((index: number) => {
-    const element = containerRef.current;
-    if (!element || index < 0) return;
-    const top = index * rowHeight;
-    const height = element.clientHeight || rowHeight * 4;
-    if (top < element.scrollTop) element.scrollTop = top;
-    else if (top + rowHeight > element.scrollTop + height) element.scrollTop = top + rowHeight - height;
-    measure();
-  }, [measure, rowHeight]);
+  const scrollToIndex = useCallback(
+    (index: number) => {
+      const element = containerRef.current;
+      if (!element || index < 0) return;
+      const top = index * rowHeight;
+      const height = element.clientHeight || rowHeight * 4;
+      if (top < element.scrollTop) element.scrollTop = top;
+      else if (top + rowHeight > element.scrollTop + height)
+        element.scrollTop = top + rowHeight - height;
+      measure();
+    },
+    [measure, rowHeight],
+  );
   const firstVisible = Math.floor(viewport.top / rowHeight);
   const start = Math.max(0, Math.min(count, firstVisible - overscan));
-  const end = Math.min(count, Math.ceil((viewport.top + viewport.height) / rowHeight) + overscan + 1);
-  return { containerRef, onScroll, scrollToIndex, start, end, totalHeight: count * rowHeight, viewportHeight: viewport.height };
+  const end = Math.min(
+    count,
+    Math.ceil((viewport.top + viewport.height) / rowHeight) + overscan + 1,
+  );
+  return {
+    containerRef,
+    onScroll,
+    scrollToIndex,
+    start,
+    end,
+    totalHeight: count * rowHeight,
+    viewportHeight: viewport.height,
+  };
 }

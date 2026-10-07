@@ -610,7 +610,7 @@ describe("createEditorProducer", () => {
       }),
       expect.objectContaining({
         type: "editor-scroll",
-        payload: { scrollTop: 80, scrollLeft: 2 },
+        payload: { documentId: "source:javascript", scrollTop: 80, scrollLeft: 2 },
       }),
     ]);
   });

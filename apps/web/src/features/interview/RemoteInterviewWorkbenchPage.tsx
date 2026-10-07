@@ -15,6 +15,8 @@ import { CodeEditor } from "@/features/editor/CodeEditor";
 import { useCollaborationRoom } from "@/features/collaboration/useCollaborationRoom";
 import { CollaborativeEditorWorkspace } from "@/features/collaboration/CollaborativeEditorWorkspace";
 import type { CollaborationSession } from "@/features/collaboration/collaborationSession";
+import { featureFlags } from "@/shared/featureFlags";
+import { LocalCollaborationDrafts } from "@/features/collaboration/LocalCollaborationDrafts";
 import { PreviewPane } from "@/features/runtime-preview/PreviewPane";
 import { RuntimeOutputPanel } from "@/features/runtime-preview/RuntimeOutputPanel";
 import { createIframeRuntime } from "@/features/runtime-preview/iframeRuntime";
@@ -27,10 +29,8 @@ import {
 } from "./interviewMediaSession";
 import { createInterviewRealtimeReceiver } from "./interviewRealtimeReceiver";
 import { buildSnapshotRequestMessage } from "./interviewSync";
-import {
-  createInterviewRoomClient,
-  type InterviewRoomClient,
-} from "./interviewRoomClient";
+import { createDebugLog, type DebugLogOptions } from "@/shared/debugLog";
+import { createInterviewRoomClient, type InterviewRoomClient } from "./interviewRoomClient";
 import {
   createInterviewSignalingClient,
   type InboundSignalingMessage,
@@ -68,10 +68,9 @@ export type RemoteInterviewWorkbenchViewProps = {
 export type RemoteInterviewWorkbenchPageProps = {
   deps?: {
     roomClient?: InterviewRoomClient;
-    createSignalingClient?: (
-      options: InterviewSignalingClientOptions,
-    ) => InterviewSignalingClient;
+    createSignalingClient?: (options: InterviewSignalingClientOptions) => InterviewSignalingClient;
     createMediaSession?: () => InterviewMediaSession;
+    debug?: DebugLogOptions;
   };
 };
 
@@ -125,6 +124,7 @@ function RemoteInterviewWorkbenchRoom({
     [deps.roomClient],
   );
   const createSignalingClient = deps.createSignalingClient ?? createInterviewSignalingClient;
+  const debug = useMemo(() => createDebugLog(deps.debug), [deps.debug]);
   const workbench = useMemo(
     () => createRemoteInterviewWorkbench({ initialState: INITIAL_REMOTE_INTERVIEW_STABLE_STATE }),
     [],
@@ -231,12 +231,28 @@ function RemoteInterviewWorkbenchRoom({
     });
     try {
       channel.send(JSON.stringify(request));
+      debug({
+        event: "observer-snapshot-request",
+        outcome: "send-called",
+        roomId: request.roomId,
+        recordingSessionId: request.sessionId,
+        expectedSeq: request.expectedSeq,
+        lastAppliedSeq: request.lastAppliedSeq,
+      });
       lastRequestedGapRef.current = gapKey;
     } catch {
+      debug({
+        event: "observer-snapshot-request",
+        outcome: "send-failed",
+        roomId: request.roomId,
+        recordingSessionId: request.sessionId,
+        expectedSeq: request.expectedSeq,
+        lastAppliedSeq: request.lastAppliedSeq,
+      });
       // Channel went away between the readyState check and send; the next
       // workbench update will retry while the gap persists.
     }
-  }, [mediaSession, roomId, workbenchState.snapshotRequestNeeded]);
+  }, [debug, mediaSession, roomId, workbenchState.snapshotRequestNeeded]);
 
   const handleToggleMicrophone = useCallback(
     (enabled: boolean) => {
@@ -253,7 +269,8 @@ function RemoteInterviewWorkbenchRoom({
     [mediaSession],
   );
 
-  if (collaboration.role === "candidate") return <Navigate to={`/interview/candidate/${encodeURIComponent(roomId)}`} replace />;
+  if (collaboration.role === "candidate")
+    return <Navigate to={`/interview/candidate/${encodeURIComponent(roomId)}`} replace />;
   return (
     <RemoteInterviewWorkbenchView
       collaboration={collaboration.session}
@@ -279,9 +296,7 @@ function connectInterviewerSignaling({
   roomId: string;
   joinCode: string | null;
   roomClient: InterviewRoomClient;
-  createSignalingClient: (
-    options: InterviewSignalingClientOptions,
-  ) => InterviewSignalingClient;
+  createSignalingClient: (options: InterviewSignalingClientOptions) => InterviewSignalingClient;
   mediaSession: InterviewMediaSession;
   onConnectionState: (state: RemoteInterviewConnectionState) => void;
   onCandidateLeft: () => void;
@@ -377,7 +392,11 @@ function connectInterviewerSignaling({
     onConnectionState({ status: "connecting", errorMessage: null });
     void (async () => {
       try {
-        try { await mediaSession.requestLocalMedia(); } catch { /* Receive-only media and collaboration remain available. */ }
+        try {
+          await mediaSession.requestLocalMedia();
+        } catch {
+          /* Receive-only media and collaboration remain available. */
+        }
         if (closed) return;
         await mediaSession.setRemoteDescription({ type: "offer", sdp });
         if (closed) return;
@@ -447,10 +466,7 @@ function connectInterviewerSignaling({
       return;
     }
     if (message.kind === "leave" && message.role === "candidate") {
-      if (
-        activeCandidateConnectionId &&
-        activeCandidateConnectionId === message.connectionId
-      ) {
+      if (activeCandidateConnectionId && activeCandidateConnectionId === message.connectionId) {
         resetCandidateSession();
         onConnectionState({ status: "connecting", errorMessage: null });
         onCandidateLeft();
@@ -529,12 +545,12 @@ function initialConnectionState(
   if (joinCode) {
     return { status: "validating-room", errorMessage: null };
   }
-  return {
-    status: "missing-join-code",
-    errorMessage: joinCodeInvalid
-      ? "joinCode 格式非法，无法加入面试房间"
-      : "缺少 joinCode，无法加入面试房间",
-  };
+  return joinCodeInvalid
+    ? {
+        status: "missing-join-code",
+        errorMessage: "joinCode 格式非法，无法加入面试房间",
+      }
+    : { status: "validating-room", errorMessage: null };
 }
 
 function interviewerMediaErrorMessage(error: unknown): string {
@@ -586,6 +602,7 @@ export function RemoteInterviewWorkbenchView({
   const connection = connectionStatusView(connectionState);
   const previewRuntime = useMemo(() => createIframeRuntime(), []);
   const hasPreview = typeof runtime.previewHtml === "string" && runtime.previewHtml.length > 0;
+  const activeCollaboration = featureFlags.collaboration ? collaboration : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background text-foreground">
@@ -636,27 +653,34 @@ export function RemoteInterviewWorkbenchView({
           aria-label="候选人编辑器"
           className="relative flex min-h-0 flex-col border-r border-border"
         >
-          {!collaboration ? <div className="flex min-h-11 flex-wrap items-center gap-3 border-b border-border bg-background px-4 py-2 text-xs text-muted">
-            <span className="font-mono uppercase tracking-normal text-foreground">
-              {editor.language}
-            </span>
-            <span>font {editor.fontSize}px</span>
-            <span>applied seq {workbenchState.lastAppliedSeq}</span>
-            <span>next seq {workbenchState.expectedSeq}</span>
-          </div> : null}
+          {!activeCollaboration ? (
+            <div className="flex min-h-11 flex-wrap items-center gap-3 border-b border-border bg-background px-4 py-2 text-xs text-muted">
+              <LocalCollaborationDrafts roomId={roomId} />
+              <span className="font-mono uppercase tracking-normal text-foreground">
+                {editor.language}
+              </span>
+              <span>font {editor.fontSize}px</span>
+              <span>applied seq {workbenchState.lastAppliedSeq}</span>
+              <span>next seq {workbenchState.expectedSeq}</span>
+            </div>
+          ) : null}
           <div className="relative min-h-0 flex-1">
-            {collaboration ? <CollaborativeEditorWorkspace session={collaboration} /> : <CodeEditor
-              language={editor.language}
-              initialValue={editor.code}
-              value={editor.code}
-              fontSize={editor.fontSize}
-              theme={editor.theme}
-              readOnly
-              cursor={editor.cursor}
-              selection={editor.selection}
-              scrollTop={editor.scrollTop}
-              scrollLeft={editor.scrollLeft}
-            />}
+            {activeCollaboration ? (
+              <CollaborativeEditorWorkspace session={activeCollaboration} />
+            ) : (
+              <CodeEditor
+                language={editor.language}
+                initialValue={editor.code}
+                value={editor.code}
+                fontSize={editor.fontSize}
+                theme={editor.theme}
+                readOnly
+                cursor={editor.cursor}
+                selection={editor.selection}
+                scrollTop={editor.scrollTop}
+                scrollLeft={editor.scrollLeft}
+              />
+            )}
             <div className="pointer-events-none absolute bottom-4 right-4 z-50 h-32 w-32 overflow-hidden rounded-full border border-border bg-surface-raised shadow-elevation-2">
               <MediaVideo
                 stream={mediaState.remoteStream}

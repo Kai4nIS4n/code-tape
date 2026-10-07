@@ -95,6 +95,40 @@ function readPostProcessorPayload(messages: unknown): {
 }
 
 describe("createHuggingFaceSubtitlePostProcessor", () => {
+  it("checks the actual tokenizer window before inference and trims historical context", async () => {
+    const inference = vi.fn(async (messages: unknown, options: { max_new_tokens: number }) => {
+      const prompt = (messages as Array<{ content: string }>)
+        .map((message) => message.content)
+        .join("\n");
+      expect(Math.ceil(prompt.length / 2) + options.max_new_tokens + 256).toBeLessThanOrEqual(2048);
+      return [{ generated_text: JSON.stringify({ segments: [], chapters: [] }) }];
+    });
+    const encode = vi.fn((text: string) => Array<number>(Math.ceil(text.length / 2)).fill(0));
+    const pipeline = Object.assign(inference, {
+      tokenizer: Object.assign((_text: string) => ({ input_ids: [] }), { encode }),
+      model: { config: { max_position_embeddings: 2048 } },
+    });
+    const processor = createHuggingFaceSubtitlePostProcessor({
+      pipelineFactory: vi.fn(async () => pipeline),
+    });
+    await processor.process({
+      track: makeTrack(),
+      context: {
+        code: "const historical = 1;\n".repeat(300),
+        runtimeOutput: "output\n".repeat(300),
+        glossary: ["React"],
+      },
+    });
+    expect(encode).toHaveBeenCalled();
+    expect(inference).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        JSON.parse((inference.mock.calls[0][0] as Array<{ content: string }>)[1].content) as {
+          context: { code: string };
+        }
+      ).context.code.length,
+    ).toBeLessThan(6000);
+  });
   beforeEach(() => {
     transformersMock.env.useBrowserCache = true;
     transformersMock.env.useCustomCache = false;
@@ -142,7 +176,11 @@ describe("createHuggingFaceSubtitlePostProcessor", () => {
     ]);
     expect(pipeline).toHaveBeenCalledWith(
       expect.any(Array),
-      expect.objectContaining({ do_sample: false, repetition_penalty: 1.05, return_full_text: false }),
+      expect.objectContaining({
+        do_sample: false,
+        repetition_penalty: 1.05,
+        return_full_text: false,
+      }),
     );
     expect(JSON.stringify(promptMessages)).toContain("use state hook");
     expect(JSON.stringify(promptMessages)).toContain("inputSegments");
@@ -198,7 +236,9 @@ describe("createHuggingFaceSubtitlePostProcessor", () => {
   it("rejects invalid LLM output after the retry instead of saving fallback chapters", async () => {
     const pipeline = vi
       .fn()
-      .mockResolvedValueOnce([{ generated_text: '{"segments":[{"id":"subtitle-1","text":"今天我们来做红烧肉"}]' }])
+      .mockResolvedValueOnce([
+        { generated_text: '{"segments":[{"id":"subtitle-1","text":"今天我们来做红烧肉"}]' },
+      ])
       .mockResolvedValueOnce([{ generated_text: "Still not JSON" }]);
     const postProcessor = createHuggingFaceSubtitlePostProcessor({
       pipelineFactory: vi.fn(async () => pipeline),
@@ -218,71 +258,31 @@ describe("createHuggingFaceSubtitlePostProcessor", () => {
     expect(pipeline).toHaveBeenCalledTimes(2);
   });
 
-  it("retries when the local LLM omits required chapters instead of applying fallback chapters", async () => {
-    const pipeline = vi
-      .fn()
-      .mockResolvedValueOnce([
-        {
-          generated_text: [
-            { role: "user", content: "input subtitle payload" },
-            {
-              role: "assistant",
-              content:
-                '{"segments":[{"id":"subtitle-1","text":"useState hook"}]} {"timeline":[{"id":"subtitle-1","startMs":0,"endMs":1000}]}',
-            },
-          ],
-        },
-      ])
-      .mockResolvedValueOnce([
-        {
-          generated_text: [
-          { role: "user", content: "input subtitle payload" },
-          {
-            role: "assistant",
-            content:
-              '{"segments":[{"id":"subtitle-1","text":"useState hook"}],"chapters":[{"title":"状态设计","startMs":0,"endMs":3000}]}',
-          },
-          ],
-        },
-      ]);
-    const postProcessor = createHuggingFaceSubtitlePostProcessor({
+  it("keeps valid text when the model omits chapters and reports an independent warning", async () => {
+    const pipeline = vi.fn(async () => [
+      { generated_text: '{"segments":[{"id":"subtitle-1","text":"useState hook"}]}' },
+    ]);
+    const processor = createHuggingFaceSubtitlePostProcessor({
       pipelineFactory: vi.fn(async () => pipeline),
     });
-
-    await expect(postProcessor.process({ track: makeTrack() })).resolves.toEqual({
-      segments: [{ id: "subtitle-1", text: "useState hook" }],
-      chapters: [{ title: "状态设计", startMs: 0, endMs: 3_000 }],
-    });
-    expect(pipeline).toHaveBeenCalledTimes(2);
+    const result = await processor.process({ track: makeTrack() });
+    expect(result.segments).toEqual([{ id: "subtitle-1", text: "useState hook" }]);
+    expect(result.chapters).toEqual([]);
+    expect(result.validationWarnings).toMatchObject([{ code: "invalid-chapter" }]);
+    expect(pipeline).toHaveBeenCalledTimes(1);
   });
 
-  it("retries loose title-only output instead of treating missing chapters as success", async () => {
-    const pipeline = vi
-      .fn()
-      .mockResolvedValueOnce([
-        {
-          generated_text:
-            '{"segments":[],"titles":[{"id":"subtitle-1","text":"first title"},{"id":"subtitle-1","text":"duplicate title"},{"id":"subtitle-2","text":"second title"}]}',
-        },
-      ])
-      .mockResolvedValueOnce([
-        {
-          generated_text:
-            '{"segments":[],"chapters":[{"title":"片段 1","startMs":0,"endMs":1000},{"title":"片段 2","startMs":1000,"endMs":3000}]}',
-        },
-      ]);
-    const postProcessor = createHuggingFaceSubtitlePostProcessor({
+  it("does not treat loose title-only output as valid chapters", async () => {
+    const pipeline = vi.fn(async () => [
+      { generated_text: '{"segments":[],"titles":[{"id":"subtitle-1","text":"invented title"}]}' },
+    ]);
+    const processor = createHuggingFaceSubtitlePostProcessor({
       pipelineFactory: vi.fn(async () => pipeline),
     });
-
-    await expect(postProcessor.process({ track: makeTrack() })).resolves.toEqual({
-      segments: [],
-      chapters: [
-        { title: "片段 1", startMs: 0, endMs: 1_000 },
-        { title: "片段 2", startMs: 1_000, endMs: 3_000 },
-      ],
-    });
-    expect(pipeline).toHaveBeenCalledTimes(2);
+    const result = await processor.process({ track: makeTrack() });
+    expect(result.segments).toEqual([]);
+    expect(result.chapters).toEqual([]);
+    expect(result.validationWarnings).toMatchObject([{ code: "invalid-chapter" }]);
   });
 
   it("deduplicates loose chapters that repeat the same timeline", async () => {
@@ -308,7 +308,9 @@ describe("createHuggingFaceSubtitlePostProcessor", () => {
   it("does not synthesize generic fallback chapters for non-technical invalid output", async () => {
     const pipeline = vi
       .fn()
-      .mockResolvedValueOnce([{ generated_text: '{"segments":[{"id":"subtitle-1","text":"今天我们来做红烧肉"}]' }])
+      .mockResolvedValueOnce([
+        { generated_text: '{"segments":[{"id":"subtitle-1","text":"今天我们来做红烧肉"}]' },
+      ])
       .mockResolvedValueOnce([{ generated_text: "Still not JSON" }]);
     const postProcessor = createHuggingFaceSubtitlePostProcessor({
       pipelineFactory: vi.fn(async () => pipeline),
@@ -350,7 +352,7 @@ describe("createHuggingFaceSubtitlePostProcessor", () => {
     });
   });
 
-  it("drops invented chapters that start after the final input subtitle", async () => {
+  it("rejects chapter generation outside the subtitle range but keeps valid text", async () => {
     const pipeline = vi.fn(async () => [
       {
         generated_text:
@@ -361,16 +363,21 @@ describe("createHuggingFaceSubtitlePostProcessor", () => {
       pipelineFactory: vi.fn(async () => pipeline),
     });
 
-    await expect(postProcessor.process({ track: makeTrack() })).resolves.toEqual({
-      segments: [
-        { id: "subtitle-1", text: "useState hook" },
-        { id: "subtitle-2", text: "render result" },
-      ],
-      chapters: [{ title: "状态设计", startMs: 0, endMs: 1_000 }],
-    });
+    await expect(postProcessor.process({ track: makeTrack() })).resolves.toEqual(
+      expect.objectContaining({
+        segments: [
+          { id: "subtitle-1", text: "useState hook" },
+          { id: "subtitle-2", text: "render result" },
+        ],
+        chapters: [],
+        validationWarnings: expect.arrayContaining([
+          expect.objectContaining({ code: "invalid-chapter" }),
+        ]),
+      }),
+    );
   });
 
-  it("drops overlapping chapters after ordering them by start time", async () => {
+  it("rejects an overlapping chapter batch after ordering its candidates", async () => {
     const pipeline = vi.fn(async () => [
       {
         generated_text:
@@ -381,52 +388,48 @@ describe("createHuggingFaceSubtitlePostProcessor", () => {
       pipelineFactory: vi.fn(async () => pipeline),
     });
 
-    await expect(postProcessor.process({ track: makeTrackWithSegments(4) })).resolves.toEqual({
-      segments: [],
-      chapters: [
-        { title: "前半段", startMs: 0, endMs: 2_000 },
-        { title: "后半段", startMs: 3_000, endMs: 4_000 },
-      ],
-    });
+    await expect(postProcessor.process({ track: makeTrackWithSegments(4) })).resolves.toEqual(
+      expect.objectContaining({
+        segments: [],
+        chapters: [],
+        validationWarnings: expect.arrayContaining([
+          expect.objectContaining({ code: "invalid-chapter" }),
+        ]),
+      }),
+    );
   });
 
-  it("drops unknown and repeated correction segment ids before returning the model result", async () => {
+  it("rejects the complete text batch when it contains duplicate or invented IDs", async () => {
     const pipeline = vi.fn(async () => [
       {
         generated_text:
-          '{"segments":[{"id":"subtitle-1","text":"useState hook"},{"id":"subtitle-2","text":"render result"},{"id":"subtitle-2","text":"duplicated render result"},{"id":"subtitle-3","text":"invented segment"}],"chapters":[{"title":"状态设计","startMs":0,"endMs":3000}]}',
+          '{"segments":[{"id":"subtitle-1","text":"useState hook"},{"id":"subtitle-2","text":"render result"},{"id":"subtitle-2","text":"duplicate"},{"id":"subtitle-3","text":"invented"}],"chapters":[{"title":"状态设计","startMs":0,"endMs":3000}]}',
       },
     ]);
-    const postProcessor = createHuggingFaceSubtitlePostProcessor({
+    const processor = createHuggingFaceSubtitlePostProcessor({
       pipelineFactory: vi.fn(async () => pipeline),
     });
-
-    await expect(postProcessor.process({ track: makeTrack() })).resolves.toEqual({
-      segments: [
-        { id: "subtitle-1", text: "useState hook" },
-        { id: "subtitle-2", text: "render result" },
-      ],
-      chapters: [{ title: "状态设计", startMs: 0, endMs: 3_000 }],
-    });
+    const result = await processor.process({ track: makeTrack() });
+    expect(result.segments).toEqual([]);
+    expect(result.chapters).toEqual([{ title: "状态设计", startMs: 0, endMs: 3000 }]);
+    expect(result.validationWarnings).toMatchObject([{ code: "invalid-correction" }]);
   });
 
-  it("records debug reasons when sparse subtitle corrections are dropped", async () => {
+  it("reports only sanitized rejection categories while rejecting the batch", async () => {
     const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
     const pipeline = vi.fn(async () => [
       {
         generated_text:
-          '{"segments":[{"id":"subtitle-404","text":"invented segment"},{"id":"subtitle-1","text":"useState hook"},{"id":"subtitle-1","text":"duplicate"},{"id":"subtitle-2","text":"chapter jump point"}],"chapters":[{"title":"状态设计","startMs":0,"endMs":3000}]}',
+          '{"segments":[{"id":"subtitle-404","text":"invented"},{"id":"subtitle-1","text":"useState hook"},{"id":"subtitle-1","text":"duplicate"},{"id":"subtitle-2","text":"chapter jump point"}],"chapters":[{"title":"状态设计","startMs":0,"endMs":3000}]}',
       },
     ]);
-    const postProcessor = createHuggingFaceSubtitlePostProcessor({
+    const processor = createHuggingFaceSubtitlePostProcessor({
       pipelineFactory: vi.fn(async () => pipeline),
     });
-
     try {
-      await expect(postProcessor.process({ track: makeTrack() })).resolves.toEqual({
-        segments: [{ id: "subtitle-1", text: "useState hook" }],
-        chapters: [{ title: "状态设计", startMs: 0, endMs: 3_000 }],
-      });
+      const result = await processor.process({ track: makeTrack() });
+      expect(result.segments).toEqual([]);
+      expect(result.validationWarnings).toMatchObject([{ code: "invalid-correction" }]);
       expect(debug).toHaveBeenCalledWith(
         "[code-tape] dropped subtitle correction",
         expect.objectContaining({ reason: "unknown-segment", segmentId: "subtitle-404" }),
@@ -472,15 +475,17 @@ describe("createHuggingFaceSubtitlePostProcessor", () => {
       pipelineFactory: vi.fn(async () => pipeline),
     });
 
-    await expect(postProcessor.process({
-      track: {
-        ...makeTrack(),
-        segments: [
-          { id: "subtitle-1", startMs: 0, endMs: 1_000, text: "use state hook" },
-          { id: "subtitle-2", startMs: 1_000, endMs: 3_000, text: "use effect 里面清理 worker" },
-        ],
-      },
-    })).resolves.toEqual({
+    await expect(
+      postProcessor.process({
+        track: {
+          ...makeTrack(),
+          segments: [
+            { id: "subtitle-1", startMs: 0, endMs: 1_000, text: "use state hook" },
+            { id: "subtitle-2", startMs: 1_000, endMs: 3_000, text: "use effect 里面清理 worker" },
+          ],
+        },
+      }),
+    ).resolves.toEqual({
       segments: [{ id: "subtitle-1", text: "useState hook" }],
       chapters: [{ title: "副作用清理", startMs: 0, endMs: 3_000 }],
     });
@@ -497,15 +502,17 @@ describe("createHuggingFaceSubtitlePostProcessor", () => {
       pipelineFactory: vi.fn(async () => pipeline),
     });
 
-    await expect(postProcessor.process({
-      track: {
-        ...makeTrack(),
-        segments: [
-          { id: "subtitle-1", startMs: 0, endMs: 1_000, text: "play right 跑端到端测试" },
-          { id: "subtitle-2", startMs: 1_000, endMs: 3_000, text: "vit test 负责单元测试" },
-        ],
-      },
-    })).resolves.toEqual({
+    await expect(
+      postProcessor.process({
+        track: {
+          ...makeTrack(),
+          segments: [
+            { id: "subtitle-1", startMs: 0, endMs: 1_000, text: "play right 跑端到端测试" },
+            { id: "subtitle-2", startMs: 1_000, endMs: 3_000, text: "vit test 负责单元测试" },
+          ],
+        },
+      }),
+    ).resolves.toEqual({
       segments: [
         { id: "subtitle-1", text: "Playwright 跑端到端测试" },
         { id: "subtitle-2", text: "Vitest 负责单元测试" },
@@ -530,7 +537,12 @@ describe("createHuggingFaceSubtitlePostProcessor", () => {
         track: {
           ...makeTrack(),
           segments: [
-            { id: "subtitle-1", startMs: 0, endMs: 1_000, text: "先讲 use state，再看 render result" },
+            {
+              id: "subtitle-1",
+              startMs: 0,
+              endMs: 1_000,
+              text: "先讲 use state，再看 render result",
+            },
           ],
         },
       }),
@@ -555,9 +567,7 @@ describe("createHuggingFaceSubtitlePostProcessor", () => {
       postProcessor.process({
         track: {
           ...makeTrack(),
-          segments: [
-            { id: "subtitle-1", startMs: 0, endMs: 1_000, text: "redner result" },
-          ],
+          segments: [{ id: "subtitle-1", startMs: 0, endMs: 1_000, text: "redner result" }],
         },
       }),
     ).resolves.toEqual({
@@ -627,9 +637,7 @@ describe("createHuggingFaceSubtitlePostProcessor", () => {
       postProcessor.process({
         track: {
           ...makeTrack(),
-          segments: [
-            { id: "subtitle-1", startMs: 0, endMs: 1_000, text: "看看看看这个组件" },
-          ],
+          segments: [{ id: "subtitle-1", startMs: 0, endMs: 1_000, text: "看看看看这个组件" }],
         },
       }),
     ).resolves.toEqual({
@@ -689,8 +697,7 @@ describe("createHuggingFaceSubtitlePostProcessor", () => {
   it("uses a safer short-track generation budget for JSON chapters and sparse corrections", async () => {
     const pipeline = vi.fn(async (_prompt: unknown, _options: { max_new_tokens: number }) => [
       {
-        generated_text:
-          '{"segments":[],"chapters":[{"title":"片段 1","startMs":0,"endMs":5000}]}',
+        generated_text: '{"segments":[],"chapters":[{"title":"片段 1","startMs":0,"endMs":5000}]}',
       },
     ]);
     const postProcessor = createHuggingFaceSubtitlePostProcessor({
@@ -800,9 +807,9 @@ describe("createHuggingFaceSubtitlePostProcessor", () => {
 
       const result = await postProcessor.process({ track });
 
-      expect(pipeline.mock.calls.map((call) => readPostProcessorPayload(call[0]).inputSegments.length)).toEqual(
-        expectedChunkSizes,
-      );
+      expect(
+        pipeline.mock.calls.map((call) => readPostProcessorPayload(call[0]).inputSegments.length),
+      ).toEqual(expectedChunkSizes);
       expect(result.segments.map((segment) => segment.id)).toEqual(
         expectedChunkSizes.map((_, index) => `subtitle-${index * 60 + 1}`),
       );
@@ -852,9 +859,9 @@ describe("createHuggingFaceSubtitlePostProcessor", () => {
     });
     expect(pipelineFactory).toHaveBeenCalledTimes(1);
     expect(pipeline).toHaveBeenCalledTimes(3);
-    expect(pipeline.mock.calls.map((call) => readPostProcessorPayload(call[0]).inputSegments.length)).toEqual([
-      60, 60, 1,
-    ]);
+    expect(
+      pipeline.mock.calls.map((call) => readPostProcessorPayload(call[0]).inputSegments.length),
+    ).toEqual([60, 60, 1]);
     for (const call of pipeline.mock.calls) {
       const payload = readPostProcessorPayload(call[0]);
       expect(payload.inputSegments.length).toBeLessThanOrEqual(60);
@@ -862,107 +869,65 @@ describe("createHuggingFaceSubtitlePostProcessor", () => {
     }
   });
 
-  it("drops out-of-window and repeated corrections while chunking oversized tracks", async () => {
-    const track = makeTrackWithSegments(121);
-    const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
+  it("rejects invalid chunk corrections instead of silently retaining part of a batch", async () => {
     const pipeline = vi.fn(async (messages: unknown) => {
-      const payload = readPostProcessorPayload(messages);
-      const firstSegment = payload.inputSegments[0];
-      const lastSegment = payload.inputSegments.at(-1);
-      if (!firstSegment || !lastSegment) throw new Error("empty chunk");
-      expect(payload.timeline).toBeUndefined();
+      const input = readPostProcessorPayload(messages).inputSegments;
       return [
         {
           generated_text: JSON.stringify({
             segments: [
-              { id: firstSegment.id, text: `${firstSegment.text} corrected` },
-              { id: firstSegment.id, text: `${firstSegment.text} duplicate` },
-              { id: "subtitle-999", text: "invented segment" },
+              { id: input[0].id, text: input[0].text + " corrected" },
+              { id: input[0].id, text: "duplicate" },
+              { id: "invented", text: "bad" },
             ],
             chapters: [
-              { title: "越界章节", startMs: lastSegment.endMs + 10_000, endMs: lastSegment.endMs + 12_000 },
-              { title: "有效章节", startMs: firstSegment.startMs, endMs: lastSegment.endMs },
+              {
+                title: "out of window",
+                startMs: input.at(-1)!.endMs + 1000,
+                endMs: input.at(-1)!.endMs + 2000,
+              },
             ],
           }),
         },
       ];
     });
-    const postProcessor = createHuggingFaceSubtitlePostProcessor({
+    const processor = createHuggingFaceSubtitlePostProcessor({
       pipelineFactory: vi.fn(async () => pipeline),
     });
-
-    try {
-      await expect(postProcessor.process({ track })).resolves.toEqual({
-        segments: [
-          { id: "subtitle-1", text: "segment 1 corrected" },
-          { id: "subtitle-61", text: "segment 61 corrected" },
-          { id: "subtitle-121", text: "segment 121 corrected" },
-        ],
-        chapters: [
-          { title: "有效章节", startMs: 0, endMs: 60_000 },
-          { title: "有效章节", startMs: 60_000, endMs: 120_000 },
-          { title: "有效章节", startMs: 120_000, endMs: 121_000 },
-        ],
-      });
-      expect(debug).toHaveBeenCalledWith(
-        "[code-tape] dropped subtitle correction",
-        expect.objectContaining({ reason: "duplicate-segment" }),
-      );
-      expect(debug).toHaveBeenCalledWith(
-        "[code-tape] dropped subtitle correction",
-        expect.objectContaining({ reason: "unknown-segment", segmentId: "subtitle-999" }),
-      );
-    } finally {
-      debug.mockRestore();
-    }
+    const result = await processor.process({ track: makeTrackWithSegments(121) });
+    expect(result.segments).toEqual([]);
+    expect(result.chapters).toEqual([]);
+    expect(
+      result.validationWarnings?.some((warning) => warning.code === "invalid-correction"),
+    ).toBe(true);
+    expect(result.validationWarnings?.some((warning) => warning.code === "invalid-chapter")).toBe(
+      true,
+    );
+    expect(pipeline).toHaveBeenCalledTimes(3);
   });
 
-  it("keeps merged chunk chapters ordered and scoped to each subtitle window", async () => {
-    const track = makeTrackWithSegments(121);
+  it("keeps legal chunk chapters ordered and refuses an out-of-window chunk", async () => {
     const pipeline = vi.fn(async (messages: unknown) => {
-      const payload = readPostProcessorPayload(messages);
-      const firstSegment = payload.inputSegments[0];
-      const lastSegment = payload.inputSegments.at(-1);
-      if (!firstSegment || !lastSegment) throw new Error("empty chunk");
-      expect(payload.timeline).toBeUndefined();
-      const callIndex = pipeline.mock.calls.length;
+      const input = readPostProcessorPayload(messages).inputSegments;
+      const first = input[0];
+      const last = input.at(-1)!;
       const chapters =
-        callIndex === 2
-          ? [
-              { title: "重复片段", startMs: 0, endMs: 10_000 },
-              { title: "窗口前污染", startMs: 50_000, endMs: 55_000 },
-              { title: "第二段", startMs: firstSegment.startMs, endMs: lastSegment.endMs },
-            ]
-          : [
-              {
-                title: `靠后 ${callIndex}`,
-                startMs: firstSegment.startMs + 30_000,
-                endMs: Math.min(firstSegment.startMs + 45_000, lastSegment.endMs),
-              },
-              { title: `靠前 ${callIndex}`, startMs: firstSegment.startMs, endMs: firstSegment.startMs + 10_000 },
-            ];
-      return [
-        {
-          generated_text: JSON.stringify({
-            segments: [],
-            chapters,
-          }),
-        },
-      ];
+        pipeline.mock.calls.length === 2
+          ? [{ title: "polluted", startMs: 0, endMs: 10000 }]
+          : [{ title: "valid " + first.id, startMs: first.startMs, endMs: last.endMs }];
+      return [{ generated_text: JSON.stringify({ segments: [], chapters }) }];
     });
-    const postProcessor = createHuggingFaceSubtitlePostProcessor({
+    const processor = createHuggingFaceSubtitlePostProcessor({
       pipelineFactory: vi.fn(async () => pipeline),
     });
-
-    await expect(postProcessor.process({ track })).resolves.toEqual({
-      segments: [],
-      chapters: [
-        { title: "靠前 1", startMs: 0, endMs: 10_000 },
-        { title: "靠后 1", startMs: 30_000, endMs: 45_000 },
-        { title: "第二段", startMs: 60_000, endMs: 120_000 },
-        { title: "靠前 3", startMs: 120_000, endMs: 121_000 },
-      ],
-    });
+    const result = await processor.process({ track: makeTrackWithSegments(121) });
+    expect(result.chapters).toEqual([
+      { title: "valid subtitle-1", startMs: 0, endMs: 60000 },
+      { title: "valid subtitle-121", startMs: 120000, endMs: 121000 },
+    ]);
+    expect(result.validationWarnings?.some((warning) => warning.code === "invalid-chapter")).toBe(
+      true,
+    );
     expect(pipeline).toHaveBeenCalledTimes(3);
   });
 

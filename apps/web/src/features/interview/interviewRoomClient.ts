@@ -59,6 +59,24 @@ export type InterviewRoomClientOptions = {
   fetch?: typeof fetch;
 };
 
+export function createInterviewRoomInvite(
+  roomId: string,
+  options: InterviewRoomClientOptions = {},
+): Promise<InterviewRoomClientResult<{ joinCode: string; expiresAt: string }>> {
+  return requestJson({
+    fetch: options.fetch ?? authClient.fetch,
+    url: buildUrl(`/api/interviews/rooms/${encodeURIComponent(roomId)}/invites`, options.baseUrl),
+    init: { method: "POST", headers: { "content-type": "application/json" }, body: "{}" },
+    validate(value) {
+      if (!isJsonObject(value)) return null;
+      const joinCode = value.joinCode ?? value.token;
+      return isNonEmptyString(joinCode) && isNonEmptyString(value.expiresAt)
+        ? { joinCode, expiresAt: value.expiresAt }
+        : null;
+    },
+  });
+}
+
 export function createInterviewRoomClient(
   options: InterviewRoomClientOptions = {},
 ): InterviewRoomClient {
@@ -66,14 +84,18 @@ export function createInterviewRoomClient(
 
   const authorizeSignaling = async <T extends { roomId: string; signalingUrl: string }>(result: InterviewRoomClientResult<T>): Promise<InterviewRoomClientResult<T>> => {
     if (!result.ok || options.fetch) return result;
-    const response = await fetchImpl(buildUrl(`/api/interviews/rooms/${encodeURIComponent(result.value.roomId)}/ws-tickets`, options.baseUrl), {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ purpose: "signaling" }),
-    });
-    if (!response.ok) return { ok: false, error: { code: "unauthorized", message: "无法取得房间信令权限", status: response.status } };
-    const ticket = await response.json() as { ticket: string };
-    const url = buildUrl(result.value.signalingUrl, options.baseUrl);
-    url.searchParams.set("ticket", ticket.ticket);
-    return { ok: true, value: { ...result.value, signalingUrl: url.href } };
+    try {
+      const response = await fetchImpl(buildUrl(`/api/interviews/rooms/${encodeURIComponent(result.value.roomId)}/ws-tickets`, options.baseUrl), {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ purpose: "signaling" }),
+      });
+      // A failed optional media ticket must not discard a successfully created
+      // room and prevent its independent collaboration connection.
+      if (!response.ok) return result;
+      const ticket = await response.json() as { ticket: string };
+      const url = buildUrl(result.value.signalingUrl, options.baseUrl);
+      url.searchParams.set("ticket", ticket.ticket);
+      return { ok: true, value: { ...result.value, signalingUrl: url.href } };
+    } catch { return result; }
   };
 
   return {

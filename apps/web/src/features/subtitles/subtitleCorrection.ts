@@ -25,14 +25,26 @@ export function applySubtitleCorrection(
 
   for (const segment of correction.segments) {
     if (!segmentIds.has(segment.id)) {
-      return invalid(track, "invalid-correction", `correction references unknown segment: ${segment.id}`);
+      return invalid(
+        track,
+        "invalid-correction",
+        `correction references unknown segment: ${segment.id}`,
+      );
     }
     if (correctedTextById.has(segment.id)) {
-      return invalid(track, "invalid-correction", `correction repeats subtitle segment: ${segment.id}`);
+      return invalid(
+        track,
+        "invalid-correction",
+        `correction repeats subtitle segment: ${segment.id}`,
+      );
     }
     const text = segment.text.trim();
     if (!text || text.length > 4_000) {
-      return invalid(track, "invalid-correction", `correction text is empty for segment: ${segment.id}`);
+      return invalid(
+        track,
+        "invalid-correction",
+        `correction text is empty for segment: ${segment.id}`,
+      );
     }
     correctedTextById.set(segment.id, text);
   }
@@ -77,13 +89,16 @@ function normalizeChapters(
   for (const chapter of chapters) {
     const title = chapter.title.trim();
     const startMs = Math.round(chapter.startMs);
-    const endMs =
-      typeof chapter.endMs === "number"
-        ? Math.round(chapter.endMs)
-        : undefined;
+    const endMs = typeof chapter.endMs === "number" ? Math.round(chapter.endMs) : undefined;
 
     if (!title || title.length > 200) return { warning: "chapter title is empty or too long" };
-    if (!Number.isFinite(startMs) || startMs < 0 || startMs >= durationMs || (endMs !== undefined && (!Number.isFinite(endMs) || endMs > durationMs))) return { warning: "chapter time is outside the recording" };
+    if (
+      !Number.isFinite(startMs) ||
+      startMs < 0 ||
+      startMs >= durationMs ||
+      (endMs !== undefined && (!Number.isFinite(endMs) || endMs > durationMs))
+    )
+      return { warning: "chapter time is outside the recording" };
     candidates.push({
       title,
       startMs,

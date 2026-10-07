@@ -51,17 +51,30 @@ export function openAppDatabase(path: string): AppDatabase {
     INSERT OR IGNORE INTO schema_migrations(version) VALUES(1);
   `);
   // Connections belong to a process, not to durable room membership.
-  for (const row of db.prepare("SELECT id,payload FROM interview_rooms").all() as Array<{id:string;payload:string}>) {
+  for (const row of db
+    .prepare("SELECT id,payload FROM interview_rooms")
+    .all() as Array<{ id: string; payload: string }>) {
     const room = JSON.parse(row.payload) as Record<string, unknown>;
     room.candidateConnectionId = null;
     room.interviewerConnectionId = null;
-    if (room.status === "live" || room.status === "connecting") room.status = "waiting";
-    db.prepare("UPDATE interview_rooms SET payload=? WHERE id=?").run(JSON.stringify(room), row.id);
+    // Older task snapshots duplicated an invitation capability in room JSON.
+    // Keep its hash in room_invites, but scrub the plaintext mirror.
+    delete room.joinCode;
+    if (room.status === "live" || room.status === "connecting")
+      room.status = "waiting";
+    db.prepare("UPDATE interview_rooms SET payload=? WHERE id=?").run(
+      JSON.stringify(room),
+      row.id,
+    );
   }
   return db;
 }
 
-export function readPayload<T>(db: AppDatabase, sql: string, ...params: unknown[]): T | null {
-  const row = db.prepare(sql).get(...params) as {payload:string} | undefined;
-  return row ? JSON.parse(row.payload) as T : null;
+export function readPayload<T>(
+  db: AppDatabase,
+  sql: string,
+  ...params: unknown[]
+): T | null {
+  const row = db.prepare(sql).get(...params) as { payload: string } | undefined;
+  return row ? (JSON.parse(row.payload) as T) : null;
 }

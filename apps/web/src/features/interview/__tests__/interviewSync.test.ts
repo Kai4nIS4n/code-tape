@@ -14,6 +14,8 @@ import {
   type InterviewRealtimeDataChannel,
 } from "../interviewSync";
 import { INITIAL_REMOTE_INTERVIEW_STABLE_STATE } from "../remoteInterviewInitialState";
+import { createEventBus } from "@/features/recorder/eventBus";
+import { createRecordingClock } from "@/features/recorder/recordingClock";
 
 function initialStableState(): ReplayStableState {
   return cloneReplayStableState(INITIAL_REMOTE_INTERVIEW_STABLE_STATE);
@@ -95,6 +97,40 @@ function createFakeEventBus(
 }
 
 describe("InterviewSyncPublisher", () => {
+  it.each(["event-count", "time"] as const)("flushes every dirty document before a %s snapshot without reentry or sequence rollback", (trigger) => {
+    const { channel, sent } = createFakeChannel();
+    let now = 0;
+    const clock = createRecordingClock({ nowProvider: () => now }); clock.start();
+    const bus = createEventBus({ clock });
+    const initial = initialStableState();
+    initial.editor.language = "javascript";
+    initial.editor.activeScriptLanguage = "javascript";
+    initial.editor.activeDocumentId = "source:javascript";
+    let dirty = false, flushes = 0;
+    const publisher = createInterviewSyncPublisher({ channel, roomId: "room", sessionId: "session", snapshotState: initial, nowProvider: () => now, snapshotEventInterval: trigger === "event-count" ? 2 : 100, snapshotTimeIntervalMs: 5000,
+      beforeSnapshot: () => {
+        flushes++;
+        if (!dirty) return;
+        dirty = false;
+        const payload = (contentEvent(1) as Extract<RecordingEvent, { type: "content-change" }>).payload;
+        bus.emit({ type: "content-change", source: "editor", track: "main", payload: { ...payload, code: "latest JS", language: "javascript", documentId: "source:javascript" } });
+        bus.emit({ type: "content-change", source: "editor", track: "main", payload: { ...payload, code: "latest HTML", language: "html", documentId: "source:html" } });
+        expect(publisher.publishSnapshot()).toEqual({ ok: false, reason: "snapshot-in-progress" });
+      },
+    });
+    publisher.subscribeTo(bus);
+    bus.emit({ type: "content-change", source: "editor", track: "main", payload: { ...(contentEvent(1, "old JS") as Extract<RecordingEvent, { type: "content-change" }>).payload, language: "javascript", documentId: "source:javascript" } });
+    dirty = true;
+    if (trigger === "time") now = 5000;
+    if (trigger === "event-count") bus.emit({ type: "selection-change", source: "editor", track: "main", payload: { documentId: "source:javascript", cursor: null, selection: null } });
+    else bus.emit({ type: "shortcut", source: "shortcut", track: "ui", payload: { keys: ["Control", "S"], label: "Format" } });
+    const messages = sent.map((data) => JSON.parse(data));
+    expect(messages.filter((message) => message.kind === "recording-event").map((message) => message.event.seq)).toEqual([1, 2, 3, 4]);
+    const snapshots = messages.filter((message) => message.kind === "state-snapshot");
+    expect(snapshots).toHaveLength(1); expect(flushes).toBe(1);
+    expect(snapshots[0]).toMatchObject({ snapshotSeq: 4, state: { editor: { code: "latest JS", language: "javascript", documents: { html: { code: "latest HTML" } } } } });
+  });
+
   it("wraps event bus recording events for the reliable DataChannel without mutating them", () => {
     const { channel, sent } = createFakeChannel();
     const bus = createFakeEventBus();

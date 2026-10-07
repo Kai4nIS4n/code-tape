@@ -1,7 +1,17 @@
-import { fireEvent, render, screen, waitFor, waitForElementToBeRemoved } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  waitForElementToBeRemoved,
+} from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RecordingListItem, RecordingPackageV1, RecordingRepository } from "@/shared/recording-schema";
+import type {
+  RecordingListItem,
+  RecordingPackageV1,
+  RecordingRepository,
+} from "@/shared/recording-schema";
 import type {
   CloudRecordingDetailResponse,
   CloudRecordingListItem,
@@ -36,7 +46,15 @@ const cloudRepositoryMocks = {
   rename: vi.fn(),
   remove: vi.fn(),
   getOwnerToken: vi.fn(),
+  listShareLinks: vi.fn(),
+  revokeShareLink: vi.fn(),
 };
+
+const accountState = vi.hoisted(() => ({
+  user: { id: "test-account" } as { id: string } | null,
+  epoch: 0,
+}));
+vi.mock("@/features/auth/useAuth", () => ({ useAuth: () => accountState }));
 
 vi.mock("../recordingStore", () => ({
   createRecordingStore: () => repositoryMocks as unknown as RecordingRepository,
@@ -90,6 +108,8 @@ function renderPage() {
 
 describe("RecordingLibraryPage", () => {
   beforeEach(() => {
+    accountState.user = { id: "test-account" };
+    accountState.epoch = 0;
     Object.values(repositoryMocks).forEach((fn) => fn.mockReset());
     Object.values(cloudRepositoryMocks).forEach((fn) => fn.mockReset());
     repositoryMocks.list.mockResolvedValue([]);
@@ -169,9 +189,7 @@ describe("RecordingLibraryPage", () => {
     expect(screen.getByRole("status")).toHaveTextContent("\u52a0\u8f7d\u4e2d");
     await waitForElementToBeRemoved(() => screen.queryByRole("status"));
     const dialog = await screen.findByRole("dialog");
-    expect(dialog).toHaveTextContent(
-      "\u8bfb\u53d6\u5931\u8d25\uff1aidb read failed",
-    );
+    expect(dialog).toHaveTextContent("\u8bfb\u53d6\u5931\u8d25\uff1aidb read failed");
     fireEvent.click(screen.getByRole("button", { name: "\u786e\u8ba4" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByText("\u8bfb\u53d6\u5931\u8d25\uff1aidb read failed")).toBeInTheDocument();
@@ -185,10 +203,7 @@ describe("RecordingLibraryPage", () => {
     await waitForElementToBeRemoved(() => screen.queryByRole("status"));
 
     const replayLink = screen.getByRole("link", { name: BASE_TITLE });
-    expect(replayLink).toHaveAttribute(
-      "href",
-      expect.stringContaining("/replay/rec-1"),
-    );
+    expect(replayLink).toHaveAttribute("href", expect.stringContaining("/replay/rec-1"));
     expect(replayLink.closest("tr")).toHaveClass("align-middle");
     expect(screen.getByText(/TypeScript/)).toBeInTheDocument();
     expect(screen.getByText(/\u97f3\u9891/)).toBeInTheDocument();
@@ -197,7 +212,9 @@ describe("RecordingLibraryPage", () => {
 
   it("renders a local recording thumbnail when a thumbnail blob is available", async () => {
     repositoryMocks.list.mockResolvedValue([{ ...BASE_ITEM, thumbnailBlobId: "thumbnail-1" }]);
-    repositoryMocks.loadThumbnail.mockResolvedValueOnce(new Blob(["thumbnail"], { type: "image/webp" }));
+    repositoryMocks.loadThumbnail.mockResolvedValueOnce(
+      new Blob(["thumbnail"], { type: "image/webp" }),
+    );
     renderPage();
     await waitForElementToBeRemoved(() => screen.queryByRole("status"));
 
@@ -235,7 +252,9 @@ describe("RecordingLibraryPage", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "\u4fdd\u5b58" }));
 
-    expect(await screen.findByText("\u6807\u9898\u4e0d\u80fd\u4e3a\u7a7a\u3002")).toBeInTheDocument();
+    expect(
+      await screen.findByText("\u6807\u9898\u4e0d\u80fd\u4e3a\u7a7a\u3002"),
+    ).toBeInTheDocument();
     expect(repositoryMocks.rename).not.toHaveBeenCalled();
   });
 
@@ -263,8 +282,12 @@ describe("RecordingLibraryPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "\u5220\u9664" }));
     fireEvent.click(screen.getByRole("button", { name: "\u786e\u8ba4\u5220\u9664" }));
 
-    expect(await screen.findByText("\u5220\u9664\u5931\u8d25\uff1aidb delete failed")).toBeInTheDocument();
-    expect(screen.getByText(`\u786e\u8ba4\u5220\u9664\u300c${BASE_TITLE}\u300d\uff1f`)).toBeInTheDocument();
+    expect(
+      await screen.findByText("\u5220\u9664\u5931\u8d25\uff1aidb delete failed"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(`\u786e\u8ba4\u5220\u9664\u300c${BASE_TITLE}\u300d\uff1f`),
+    ).toBeInTheDocument();
     expect(repositoryMocks.list).toHaveBeenCalledTimes(1);
   });
 
@@ -316,19 +339,25 @@ describe("RecordingLibraryPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "\u5bfc\u51fa ZIP" }));
 
-    expect(await screen.findByRole("dialog")).toHaveTextContent("\u5bfc\u51fa\u5931\u8d25\uff1azip failed");
+    expect(await screen.findByRole("dialog")).toHaveTextContent(
+      "\u5bfc\u51fa\u5931\u8d25\uff1azip failed",
+    );
     expect(URL.createObjectURL).not.toHaveBeenCalled();
   });
 
   it("imports valid zip and refreshes list", async () => {
     repositoryMocks.list
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ ...BASE_ITEM, id: "rec-new", title: "\u5bfc\u5165\u6210\u529f\u6837\u4f8b" }]);
+      .mockResolvedValueOnce([
+        { ...BASE_ITEM, id: "rec-new", title: "\u5bfc\u5165\u6210\u529f\u6837\u4f8b" },
+      ]);
     renderPage();
     await waitForElementToBeRemoved(() => screen.queryByRole("status"));
 
     const file = new File(["zip"], "valid.zip", { type: "application/zip" });
-    fireEvent.change(screen.getByLabelText("\u5bfc\u5165 zip \u6587\u4ef6"), { target: { files: [file] } });
+    fireEvent.change(screen.getByLabelText("\u5bfc\u5165 zip \u6587\u4ef6"), {
+      target: { files: [file] },
+    });
 
     await waitFor(() => {
       expect(repositoryMocks.importZip).toHaveBeenCalledTimes(1);
@@ -348,7 +377,9 @@ describe("RecordingLibraryPage", () => {
     await waitForElementToBeRemoved(() => screen.queryByRole("status"));
 
     const file = new File(["bad"], "invalid.zip", { type: "application/zip" });
-    fireEvent.change(screen.getByLabelText("\u5bfc\u5165 zip \u6587\u4ef6"), { target: { files: [file] } });
+    fireEvent.change(screen.getByLabelText("\u5bfc\u5165 zip \u6587\u4ef6"), {
+      target: { files: [file] },
+    });
 
     expect(await screen.findByRole("dialog")).toHaveTextContent(
       "\u5bfc\u5165\u5931\u8d25\uff1a\u538b\u7f29\u5305\u6821\u9a8c\u4e0d\u901a\u8fc7",
@@ -365,7 +396,9 @@ describe("RecordingLibraryPage", () => {
     await waitForElementToBeRemoved(() => screen.queryByRole("status"));
 
     const file = new File(["zip"], "large.zip", { type: "application/zip" });
-    fireEvent.change(screen.getByLabelText("\u5bfc\u5165 zip \u6587\u4ef6"), { target: { files: [file] } });
+    fireEvent.change(screen.getByLabelText("\u5bfc\u5165 zip \u6587\u4ef6"), {
+      target: { files: [file] },
+    });
 
     expect(await screen.findByRole("dialog")).toHaveTextContent(
       "\u672c\u5730\u5b58\u50a8\u7a7a\u95f4\u4e0d\u8db3",
@@ -374,7 +407,9 @@ describe("RecordingLibraryPage", () => {
   });
 
   it("recovers list after load failure retry", async () => {
-    repositoryMocks.list.mockRejectedValueOnce(new Error("idb read failed")).mockResolvedValueOnce([BASE_ITEM]);
+    repositoryMocks.list
+      .mockRejectedValueOnce(new Error("idb read failed"))
+      .mockResolvedValueOnce([BASE_ITEM]);
     renderPage();
     await waitForElementToBeRemoved(() => screen.queryByRole("status"));
 
@@ -382,7 +417,9 @@ describe("RecordingLibraryPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "\u91cd\u8bd5" }));
 
     expect(await screen.findByRole("link", { name: BASE_TITLE })).toBeInTheDocument();
-    expect(screen.queryByText("\u8bfb\u53d6\u5931\u8d25\uff1aidb read failed")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("\u8bfb\u53d6\u5931\u8d25\uff1aidb read failed"),
+    ).not.toBeInTheDocument();
     expect(repositoryMocks.list).toHaveBeenCalledTimes(2);
   });
 
@@ -491,7 +528,9 @@ describe("RecordingLibraryPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "上传到云端" }));
 
-    expect(await screen.findByRole("dialog")).toHaveTextContent("上传失败：events checksum mismatch");
+    expect(await screen.findByRole("dialog")).toHaveTextContent(
+      "上传失败：events checksum mismatch",
+    );
     expect(repositoryMocks.remove).not.toHaveBeenCalled();
     expect(screen.getByRole("link", { name: BASE_TITLE })).toBeInTheDocument();
   });

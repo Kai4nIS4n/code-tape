@@ -1,12 +1,52 @@
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { request as nodeRequest } from "node:http";
 import { RECORDING_SCHEMA_VERSION, type RecordingPackageV1 } from "@code-tape/recording-schema";
 import { canonicalStringify, sha256Hex } from "@code-tape/recording-schema/hash";
 import { createDemoRequestHandler, createDemoRuntime } from "../demoServer.js";
+
+test("Node adapter rejects unauthorized large uploads before reading their body and caps JSON streams", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "codetape-native-stream-"));
+  const webRoot = join(directory, "web");
+  await mkdir(webRoot);
+  await writeFile(join(webRoot, "index.html"), "<div></div>");
+  const runtime = createDemoRuntime({
+    webRoot,
+    dataDirectory: join(directory, "data"),
+    authSecret: "native-stream-test-secret-at-least-32-bytes",
+    auditSink: () => undefined,
+  });
+  await listen(runtime.server);
+  const origin = `http://127.0.0.1:${addressPort(runtime.server)}`;
+  const headerOnly = (length: number) => new Promise<number>((resolve, reject) => {
+    const request = nodeRequest(`${origin}/api/uploads/not-an-upload-token`, {
+      method: "PUT", headers: { "content-length": String(length) },
+    }, (response) => { response.resume(); resolve(response.statusCode!); });
+    request.on("error", reject);
+    request.setTimeout(2000, () => {
+      request.destroy();
+      reject(new Error("authorization waited for the large body"));
+    });
+    request.flushHeaders();
+  });
+  try {
+    assert.equal(await headerOnly(200 * 1024 * 1024), 403);
+    assert.equal(await headerOnly(250 * 1024 * 1024 + 1), 413);
+    const jsonStatus = await new Promise<number>((resolve, reject) => {
+      const request = nodeRequest(`${origin}/api/auth/register`, {
+        method: "POST", headers: { origin, "content-type": "application/json", "x-code-tape-client": "web" },
+      }, (response) => { response.resume(); resolve(response.statusCode!); });
+      request.on("error", reject);
+      request.write('{"username":"stream-user","password":"test-password","displayName":"');
+      request.end("x".repeat(2 * 1024 * 1024));
+    });
+    assert.equal(jsonStatus, 413);
+  } finally { runtime.close(); await closeServer(runtime.server); }
+});
 
 test("demo request handler serves cloud API before static SPA fallback", async () => {
   const webRoot = await makeWebRoot();

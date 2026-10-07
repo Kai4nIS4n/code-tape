@@ -205,7 +205,9 @@ function testMediaAdapter({
   };
 }
 
-function watchState(scheduler: { subscribe(listener: (state: ReplaySchedulerState) => void): () => void }) {
+function watchState(scheduler: {
+  subscribe(listener: (state: ReplaySchedulerState) => void): () => void;
+}) {
   let latest: ReplaySchedulerState | null = null;
   scheduler.subscribe((state) => {
     latest = state;
@@ -217,14 +219,108 @@ function watchState(scheduler: { subscribe(listener: (state: ReplaySchedulerStat
 }
 
 describe("createReplayScheduler", () => {
+  it("logs seek generations and superseded outcomes without recording source payloads", async () => {
+    const sink = vi.fn();
+    const completions = new Map<number, () => void>();
+    const adapter = testMediaAdapter({ currentTimeSec: () => 0, status: "ready" });
+    adapter.seek = (time) => new Promise<void>((resolve) => completions.set(time, resolve));
+    const scheduler = createReplayScheduler({
+      mediaAdapter: adapter as never,
+      debug: { enabled: true, sink },
+      tickStrategy: { start() {}, stop() {} },
+    });
+    await scheduler.load(makePkg([content(1, 100, "PRIVATE SOURCE")], [], 5000, true));
+    const old = scheduler.seekWithResult(200);
+    const latest = scheduler.seekWithResult(1000);
+    completions.get(1000)!();
+    await latest;
+    completions.get(200)!();
+    await old;
+    expect(sink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "replay-load",
+        outcome: "applied",
+        packageGeneration: 1,
+        seekGeneration: 1,
+      }),
+    );
+    expect(sink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "replay-seek",
+        outcome: "applied",
+        packageGeneration: 1,
+        seekGeneration: 3,
+        targetMs: 1000,
+        lastAppliedSeq: 1,
+      }),
+    );
+    expect(sink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "replay-seek",
+        outcome: "superseded",
+        packageGeneration: 1,
+        seekGeneration: 2,
+        targetMs: 200,
+      }),
+    );
+    expect(JSON.stringify(sink.mock.calls)).not.toContain("PRIVATE SOURCE");
+  });
+  it("plays a newly loaded package from zero instead of the previous package seek position", async () => {
+    const scheduler = createReplayScheduler({
+      clock: createTimelineClock({ nowProvider: () => 0 }),
+      tickStrategy: { start() {}, stop() {} },
+    });
+    const state = watchState(scheduler);
+    await scheduler.load(makePkg([content(1, 1000, "old future")], [], 5000));
+    await scheduler.seek(4000);
+    await scheduler.load(makePkg([content(1, 1000, "new future")], [], 5000));
+    scheduler.play();
+    scheduler.tick();
+    expect(state().timelineTimeMs).toBe(0);
+    expect(state().status).toBe("playing");
+    expect(scheduler.getStableState().editor.code).toBe("");
+  });
+
+  it("keeps the new package zero clock base after the old package delayed seek completes", async () => {
+    let complete!: () => void;
+    const adapter = testMediaAdapter({ currentTimeSec: () => 0, status: "ready" });
+    adapter.seek = () =>
+      new Promise<void>((resolve) => {
+        complete = resolve;
+      });
+    const scheduler = createReplayScheduler({
+      clock: createTimelineClock({ nowProvider: () => 0 }),
+      tickStrategy: { start() {}, stop() {} },
+    });
+    const state = watchState(scheduler);
+    await scheduler.load(makePkg([content(1, 1000, "old future")], [], 5000));
+    await scheduler.seek(3000);
+    scheduler.setMediaAdapter(adapter as never);
+    const delayed = scheduler.seekWithResult(4000);
+    await scheduler.load(makePkg([content(1, 1000, "new future")], [], 5000));
+    scheduler.play();
+    scheduler.tick();
+    complete();
+    await expect(delayed).resolves.toMatchObject({ status: "superseded" });
+    scheduler.tick();
+    expect(state().timelineTimeMs).toBe(0);
+    expect(state().status).toBe("playing");
+    expect(scheduler.getStableState().editor.code).toBe("");
+  });
   it("commits only the latest seek when slow media finishes out of order", async () => {
     const completions = new Map<number, () => void>();
     const adapter = testMediaAdapter({ currentTimeSec: () => 0, status: "ready" });
     adapter.seek = (time) => new Promise<void>((resolve) => completions.set(time, resolve));
     const onTick = vi.fn();
-    const scheduler = createReplayScheduler({ mediaAdapter: adapter as never, onTick, tickStrategy: { start: vi.fn(), stop: vi.fn() } });
+    const scheduler = createReplayScheduler({
+      mediaAdapter: adapter as never,
+      onTick,
+      tickStrategy: { start: vi.fn(), stop: vi.fn() },
+    });
     const state = watchState(scheduler);
-    await scheduler.load(makePkg([content(1, 100, "first"), content(2, 900, "latest")], [], 5000, true));
+    await scheduler.load(
+      makePkg([content(1, 100, "first"), content(2, 900, "latest")], [], 5000, true),
+    );
     scheduler.play();
     const first = scheduler.seekWithResult(200);
     const latest = scheduler.seekWithResult(1000);
@@ -242,8 +338,14 @@ describe("createReplayScheduler", () => {
   it("invalidates a pending seek when a different package loads", async () => {
     let complete!: () => void;
     const adapter = testMediaAdapter({ currentTimeSec: () => 0, status: "ready" });
-    adapter.seek = () => new Promise<void>((resolve) => { complete = resolve; });
-    const scheduler = createReplayScheduler({ mediaAdapter: adapter as never, tickStrategy: { start() {}, stop() {} } });
+    adapter.seek = () =>
+      new Promise<void>((resolve) => {
+        complete = resolve;
+      });
+    const scheduler = createReplayScheduler({
+      mediaAdapter: adapter as never,
+      tickStrategy: { start() {}, stop() {} },
+    });
     const state = watchState(scheduler);
     await scheduler.load(makePkg([content(1, 100, "old")], [], 5000, true));
     const pending = scheduler.seekWithResult(200);
@@ -257,9 +359,13 @@ describe("createReplayScheduler", () => {
 
   it("starts snapshot replay at upperBound instead of rereading the full prefix", async () => {
     const reads = { reads: 0 };
-    const events = Array.from({ length: 2000 }, (_, index) => countedContent(index + 1, index + 1, String(index + 1), reads));
+    const events = Array.from({ length: 2000 }, (_, index) =>
+      countedContent(index + 1, index + 1, String(index + 1), reads),
+    );
     const pkg = makePkg(events, [], 5000);
-    pkg.snapshots = [{ id: "near-end", timestampMs: 1990, eventSeq: 1990, state: replayFromZeroTo(pkg, 1990) }];
+    pkg.snapshots = [
+      { id: "near-end", timestampMs: 1990, eventSeq: 1990, state: replayFromZeroTo(pkg, 1990) },
+    ];
     const scheduler = createReplayScheduler({ tickStrategy: { start() {}, stop() {} } });
     await scheduler.load(pkg);
     reads.reads = 0;
@@ -674,7 +780,9 @@ describe("createReplayScheduler", () => {
       tickStrategy: { start: () => {}, stop: () => {} },
     });
     const latest = watchState(scheduler);
-    await scheduler.load(makePkg([mediaWarning(1, 0), content(2, 300, "event-only")], [], 5000, false));
+    await scheduler.load(
+      makePkg([mediaWarning(1, 0), content(2, 300, "event-only")], [], 5000, false),
+    );
 
     scheduler.play();
     wall = 400;
@@ -832,11 +940,7 @@ describe("createReplayScheduler", () => {
     });
     await scheduler.load(
       makePkg(
-        [
-          pointerClick(1, 1_000),
-          pointerMove(2, 1_250, 70, 40),
-          content(3, 1_600, "after-stable"),
-        ],
+        [pointerClick(1, 1_000), pointerMove(2, 1_250, 70, 40), content(3, 1_600, "after-stable")],
         [],
         5_000,
       ),
@@ -878,10 +982,7 @@ describe("createReplayScheduler", () => {
     await Promise.resolve();
 
     try {
-      expect(warn).toHaveBeenCalledWith(
-        "[replay-scheduler] media operation failed:",
-        flushError,
-      );
+      expect(warn).toHaveBeenCalledWith("[replay-scheduler] media operation failed:", flushError);
       expect(warn).toHaveBeenCalledWith("[replay-scheduler] media operation failed:", seekError);
     } finally {
       warn.mockRestore();
@@ -1000,7 +1101,7 @@ describe("createReplayScheduler", () => {
     metadataReady = true;
     scheduler.setMediaAdapter(adapter);
 
-    expect(seekHandler).toHaveBeenCalledWith(adapter.segments[0], 1800);
+    expect(seekHandler).toHaveBeenCalledWith(adapter.segments[0], 1800, expect.any(AbortSignal));
   });
 
   it("applies the current playback rate when a media adapter is attached", async () => {

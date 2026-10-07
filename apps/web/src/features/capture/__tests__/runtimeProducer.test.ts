@@ -10,11 +10,13 @@ import type {
 import { createEventBus } from "@/features/recorder/eventBus";
 import { createRecordingClock } from "@/features/recorder/recordingClock";
 import { createRuntimeProducer } from "../runtimeProducer";
+import { canonicalStringify, sha256Hex } from "@/shared/util/hash";
 
 function setup(overrides: {
   compile?: PreviewCompiler["compile"];
   run?: IframeRuntime["run"];
   renderDocument?: IframeRuntime["renderDocument"];
+  shouldRecord?: () => boolean;
 } = {}) {
   const clock = createRecordingClock({ nowProvider: () => 1000 });
   const bus = createEventBus({ clock, wallTimeProvider: () => "T" });
@@ -49,13 +51,41 @@ function setup(overrides: {
     reset: vi.fn(),
     destroy: vi.fn(),
   };
-  const producer = createRuntimeProducer({ bus, clock, compiler, runtime });
+  const producer = createRuntimeProducer({ bus, clock, compiler, runtime, shouldRecord: overrides.shouldRecord });
   clock.start();
   producer.start();
   return { bus, compile, producer, run, renderDocument, runtime };
 }
 
 describe("createRuntimeProducer", () => {
+  it("freezes all input documents before hashing and compiling", async () => {
+    const { bus, compile, producer } = setup();
+    const documents = { javascript: "console.log('before')", html: "<h1>before</h1>", css: "h1 { color:red }" };
+    const input = { language: "javascript" as const, source: documents.javascript, documents, activeScriptLanguage: "javascript" as const };
+    const expectedHash = await sha256Hex(canonicalStringify(input));
+    const running = producer.trigger(input);
+    documents.javascript = "console.log('after')"; documents.html = "<h1>after</h1>";
+    await running;
+    expect(compile.mock.calls[0][0]).toContain("console.log('before')");
+    expect(compile.mock.calls[0][0]).not.toContain("console.log('after')");
+    expect(bus.peek()[0]).toMatchObject({ type: "run-start", payload: { inputDocumentsHash: expectedHash } });
+  });
+
+  it("executes outside recording without adding pre-recording runtime events", async () => {
+    const { bus, producer, run } = setup({ shouldRecord: () => false });
+    await producer.trigger({ language: "javascript", source: "1" });
+    expect(run).toHaveBeenCalledTimes(1); expect(bus.peek()).toEqual([]);
+  });
+
+  it("does not add a late result to an already finalized recording", async () => {
+    let finish: (() => void) | undefined;
+    const { producer, bus, run } = setup({ run: (input) => new Promise((resolve) => { finish = () => resolve({ runId: input.runId, status: "complete", stdout: ["late"], stderr: [], previewHtml: null }); }) });
+    const running = producer.trigger({ language: "javascript", source: "1" });
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    producer.stop(); finish?.(); await running;
+    expect(bus.peek().map((event) => event.type)).toEqual(["run-start"]);
+  });
+
   it("emits run-start then run-output for a successful iframe run", async () => {
     const { bus, compile, producer, run } = setup();
 
@@ -79,7 +109,7 @@ describe("createRuntimeProducer", () => {
     expect(bus.drain().map((event) => ({ type: event.type, payload: event.payload }))).toEqual([
       {
         type: "run-start",
-        payload: { language: "javascript", runtime: "iframe", runId: runInput?.runId },
+        payload: { language: "javascript", runtime: "iframe", runId: runInput?.runId, inputDocumentsHash: expect.stringMatching(/^[a-f0-9]{64}$/) },
       },
       {
         type: "run-output",
@@ -113,7 +143,7 @@ describe("createRuntimeProducer", () => {
     const events = bus.drain().map((event) => ({ type: event.type, payload: event.payload }));
     expect(events[0]).toEqual({
       type: "run-start",
-      payload: { language: "html", runtime: "iframe", runId: result.runId },
+      payload: { language: "html", runtime: "iframe", runId: result.runId, inputDocumentsHash: expect.stringMatching(/^[a-f0-9]{64}$/) },
     });
     expect(events[1]?.type).toBe("run-output");
   });
@@ -221,7 +251,7 @@ describe("createRuntimeProducer", () => {
     expect(bus.drain().map((event) => ({ type: event.type, payload: event.payload }))).toEqual([
       {
         type: "run-start",
-        payload: { language: "typescript", runtime: "iframe", runId: result.runId },
+        payload: { language: "typescript", runtime: "iframe", runId: result.runId, inputDocumentsHash: expect.stringMatching(/^[a-f0-9]{64}$/) },
       },
       {
         type: "run-error",
@@ -257,7 +287,7 @@ describe("createRuntimeProducer", () => {
     expect(bus.drain().map((event) => ({ type: event.type, payload: event.payload }))).toEqual([
       {
         type: "run-start",
-        payload: { language: "javascript", runtime: "iframe", runId: result.runId },
+        payload: { language: "javascript", runtime: "iframe", runId: result.runId, inputDocumentsHash: expect.stringMatching(/^[a-f0-9]{64}$/) },
       },
       {
         type: "run-error",
@@ -290,7 +320,7 @@ describe("createRuntimeProducer", () => {
     expect(bus.drain().map((event) => ({ type: event.type, payload: event.payload }))).toEqual([
       {
         type: "run-start",
-        payload: { language: "javascript", runtime: "iframe", runId: result.runId },
+        payload: { language: "javascript", runtime: "iframe", runId: result.runId, inputDocumentsHash: expect.stringMatching(/^[a-f0-9]{64}$/) },
       },
       {
         type: "run-error",
@@ -382,6 +412,7 @@ describe("createRuntimeProducer", () => {
       "RuntimeProducer is already running",
     );
 
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
     expect(compile).toHaveBeenCalledTimes(1);
     expect(run).toHaveBeenCalledTimes(1);
     resolveFirstRun?.();

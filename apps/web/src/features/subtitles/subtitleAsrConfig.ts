@@ -46,7 +46,11 @@ export function saveExternalAsrConfig(
     const value = normalizeConfigStrict(config);
     selected.setItem(SUBTITLE_ASR_CONFIG_STORAGE_KEY, JSON.stringify(value));
     if (!storage) {
-      if (options.rememberKey) safeStorage("local")?.setItem(SUBTITLE_ASR_CONFIG_STORAGE_KEY, JSON.stringify({ ...value, rememberKey: true }));
+      if (options.rememberKey)
+        safeStorage("local")?.setItem(
+          SUBTITLE_ASR_CONFIG_STORAGE_KEY,
+          JSON.stringify({ ...value, rememberKey: true }),
+        );
       else safeStorage("local")?.removeItem(SUBTITLE_ASR_CONFIG_STORAGE_KEY);
     }
   } catch {
@@ -54,12 +58,13 @@ export function saveExternalAsrConfig(
   }
 }
 
-export function clearExternalAsrConfig(
-  storage?: Pick<Storage, "removeItem">,
-): void {
+export function clearExternalAsrConfig(storage?: Pick<Storage, "removeItem">): void {
   try {
     if (storage) storage.removeItem(SUBTITLE_ASR_CONFIG_STORAGE_KEY);
-    else { safeStorage("session")?.removeItem(SUBTITLE_ASR_CONFIG_STORAGE_KEY); safeStorage("local")?.removeItem(SUBTITLE_ASR_CONFIG_STORAGE_KEY); }
+    else {
+      safeStorage("session")?.removeItem(SUBTITLE_ASR_CONFIG_STORAGE_KEY);
+      safeStorage("local")?.removeItem(SUBTITLE_ASR_CONFIG_STORAGE_KEY);
+    }
   } catch {
     // ignore
   }
@@ -103,7 +108,11 @@ function normalizeConfigStrict(config: ExternalAsrConfig): ExternalAsrConfig {
 
 function safeStorage(kind: "local" | "session"): Storage | undefined {
   try {
-    return typeof globalThis !== "undefined" ? kind === "session" ? globalThis.sessionStorage : globalThis.localStorage : undefined;
+    return typeof globalThis !== "undefined"
+      ? kind === "session"
+        ? globalThis.sessionStorage
+        : globalThis.localStorage
+      : undefined;
   } catch {
     return undefined;
   }

@@ -83,7 +83,8 @@ export function SubtitleAsrConfigButton({
       <div className="flex flex-col gap-2 text-xs">
         <p className="font-medium text-foreground">外部 ASR（语音转字幕）</p>
         <p className="text-[11px] leading-4 text-muted">
-          外部 ASR 将接收录制音频，失败时回退本地识别。API Key 默认只在当前会话保存；请填支持浏览器跨域（CORS）的请求地址。
+          外部 ASR 将接收录制音频，失败时回退本地识别。API Key
+          默认只在当前会话保存；请填支持浏览器跨域（CORS）的请求地址。
         </p>
         <label className="flex flex-col gap-1" htmlFor={`${fieldId}-base`}>
           <span className="text-muted">请求地址</span>
@@ -130,7 +131,14 @@ export function SubtitleAsrConfigButton({
             className={inputClassName}
           />
         </label>
-        <label className="flex items-center gap-2"><input type="checkbox" checked={rememberKey} onChange={(event) => setRememberKey(event.target.checked)} />在此浏览器长期保存 API Key</label>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={rememberKey}
+            onChange={(event) => setRememberKey(event.target.checked)}
+          />
+          在此浏览器长期保存 API Key
+        </label>
         <div className="mt-1 flex items-center justify-between gap-2">
           <button
             type="button"

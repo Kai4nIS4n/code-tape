@@ -5,7 +5,13 @@ import type { MediaTimelineSegment } from "@/shared/recording-schema";
 describe("createMediaClockAdapter", () => {
   const segments: MediaTimelineSegment[] = [
     { blobId: "a", timelineStartMs: 0, timelineEndMs: 1000, mediaStartMs: 0, mediaEndMs: 1000 },
-    { blobId: "b", timelineStartMs: 1500, timelineEndMs: 2500, mediaStartMs: 1000, mediaEndMs: 2000 },
+    {
+      blobId: "b",
+      timelineStartMs: 1500,
+      timelineEndMs: 2500,
+      mediaStartMs: 1000,
+      mediaEndMs: 2000,
+    },
   ];
 
   it("maps timeline → media linearly inside a segment", () => {
@@ -29,7 +35,7 @@ describe("createMediaClockAdapter", () => {
     const seek = vi.fn();
     const adapter = createMediaClockAdapter({ segments, seekHandler: seek });
     await adapter.seek(1800);
-    expect(seek).toHaveBeenCalledWith(segments[1], 1300);
+    expect(seek).toHaveBeenCalledWith(segments[1], 1300, expect.any(AbortSignal));
   });
 
   it("holds seek until metadata is ready, then flushes the pending media time", async () => {
@@ -47,7 +53,7 @@ describe("createMediaClockAdapter", () => {
     metadataReady = true;
     await adapter.flushPendingSeek();
 
-    expect(seek).toHaveBeenCalledWith(segments[1], 1300);
+    expect(seek).toHaveBeenCalledWith(segments[1], 1300, expect.any(AbortSignal));
   });
 
   it("does not flush the same pending seek twice while an async seek is in flight", async () => {
@@ -90,5 +96,22 @@ describe("createMediaClockAdapter", () => {
     await adapter.flushPendingSeek();
 
     expect(seek).not.toHaveBeenCalled();
+  });
+
+  it("aborts the old underlying operation before the latest seek controls currentTime", async () => {
+    const signals: AbortSignal[] = [];
+    const handler = vi.fn((_segment: MediaTimelineSegment, _time: number, signal?: AbortSignal) => {
+      signals.push(signal!);
+      return new Promise<void>((resolve) =>
+        signal!.addEventListener("abort", () => resolve(), { once: true }),
+      );
+    });
+    const adapter = createMediaClockAdapter({ segments, seekHandler: handler });
+    const first = adapter.seek(500);
+    const latest = adapter.seek(1800);
+    expect(signals[0].aborted).toBe(true);
+    expect(signals[1].aborted).toBe(false);
+    adapter.cancelPendingSeek?.();
+    await Promise.all([first, latest]);
   });
 });

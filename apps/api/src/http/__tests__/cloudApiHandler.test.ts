@@ -8,7 +8,7 @@ import { createMemoryMetadataRepository } from "../../cloud/memoryMetadataReposi
 import { buildLocalDevObjectUrl, createLocalDevObjectStorage } from "../../cloud/localDevObjectStorage.js";
 import { createMemoryObjectStorage } from "../../cloud/memoryObjectStorage.js";
 import { createApiHandler } from "../createApiHandler.js";
-import { createCloudApiHandler } from "../cloudApiHandler.js";
+import { createCloudApiHandler as createCloudApiHandlerBase } from "../cloudApiHandler.js";
 import { createLocalDevObjectStorageHandler } from "../localDevObjectStorageHandler.js";
 import type { MetadataRepository } from "../../cloud/metadataRepository.js";
 import type { CloudRecordingAssetRecord, CloudRecordingRecord, RecordingAssetKind, RecordingStatus } from "../../cloud/types.js";
@@ -21,6 +21,18 @@ const NON_PLAYABLE_RECORDING_STATUSES = [
   "purging",
   "deleted",
 ] as const satisfies readonly Exclude<RecordingStatus, "ready">[];
+
+// These fixtures exercise the legacy service contracts; production assembly
+// supplies a verified account resolver and never enables device identities.
+function createCloudApiHandler(deps: Parameters<typeof createCloudApiHandlerBase>[0]) {
+  return createCloudApiHandlerBase({ ...deps, allowLegacyAuth: true });
+}
+
+test("standalone cloud handler fails closed unless an account resolver or explicit legacy fixture is supplied", async () => {
+  const handler=createCloudApiHandlerBase({service:createCloudRecordingService({metadata:createMemoryMetadataRepository(),objectStorage:createMemoryObjectStorage()})});
+  assert.equal((await handler(new Request("http://localhost/api/recordings",{headers:{"x-owner-token":"arbitrary-device"}}))).status,401);
+  assert.equal((await handler(new Request("http://localhost/api/auth/token",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({refreshToken:"arbitrary-device"})}))).status,404);
+});
 
 function createTestApiHandler(
   objectStorage: ReturnType<typeof createMemoryObjectStorage> | ReturnType<typeof createLocalDevObjectStorage>,
@@ -415,6 +427,8 @@ test("GET /api/recordings/:recordingId/playback returns playback descriptor for 
     title: string;
     durationMs: number;
     schemaVersion: string;
+    hasAudio: boolean;
+    hasCamera: boolean;
     manifestUrl: string;
     metaUrl: string;
     eventsUrl: string;
@@ -430,6 +444,8 @@ test("GET /api/recordings/:recordingId/playback returns playback descriptor for 
   assert.equal(body.title, "Recording rec-ready-playback");
   assert.equal(body.durationMs, 12345);
   assert.equal(body.schemaVersion, RECORDING_SCHEMA_VERSION);
+  assert.equal(body.hasAudio, true);
+  assert.equal(body.hasCamera, true);
   assert.equal(body.manifestUrl, buildLocalDevObjectUrl("http://localhost", "recordings/rec-ready-playback/package/manifest.json"));
   assert.equal(body.metaUrl, buildLocalDevObjectUrl("http://localhost", "recordings/rec-ready-playback/package/meta.json"));
   assert.equal(body.eventsUrl, buildLocalDevObjectUrl("http://localhost", "recordings/rec-ready-playback/package/events.json"));
@@ -545,6 +561,8 @@ test("GET /api/recordings/:recordingId/playback returns null for optional media/
   assert.equal(body.indexesUrl, null);
   assert.equal(body.mediaUrl, null);
   assert.equal(body.thumbnailUrl, null);
+  assert.equal(body.hasAudio, false);
+  assert.equal(body.hasCamera, false);
 });
 
 test("GET /api/recordings/:recordingId/playback requires owner token", async () => {
@@ -686,11 +704,18 @@ test("GET /api/share/:token/playback returns a shared playback descriptor withou
   const response = await handler(
     new Request(`http://localhost/api/share/${token}/playback`, { method: "GET" }),
   );
-  const body = (await response.json()) as { id: string; mediaUrl: string | null };
+  const body = (await response.json()) as {
+    id: string;
+    mediaUrl: string | null;
+    hasAudio: boolean;
+    hasCamera: boolean;
+  };
 
   assert.equal(shareResponse.status, 201);
   assert.equal(response.status, 200);
   assert.equal(body.id, "rec-shared-playback");
+  assert.equal(body.hasAudio, true);
+  assert.equal(body.hasCamera, false);
   assert.equal(body.mediaUrl, buildLocalDevObjectUrl("http://localhost", "recordings/rec-shared-playback/media/media.webm"));
 });
 
