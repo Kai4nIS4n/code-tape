@@ -20,13 +20,16 @@ permissions:
 jobs:
   auto-merge:
     if: >
+      github.repository == 'ceilf6/code-tape' &&
       (
-        github.event_name == 'workflow_run' &&
-        github.event.workflow_run.conclusion == 'success'
-      ) ||
-      (
-        github.event_name != 'workflow_run' &&
-        (github.event_name != 'issue_comment' || github.event.issue.pull_request != null)
+        (
+          github.event_name == 'workflow_run' &&
+          github.event.workflow_run.conclusion == 'success'
+        ) ||
+        (
+          github.event_name != 'workflow_run' &&
+          (github.event_name != 'issue_comment' || github.event.issue.pull_request != null)
+        )
       )
     runs-on: ubuntu-latest
     steps:

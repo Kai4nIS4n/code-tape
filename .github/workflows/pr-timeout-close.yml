@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   close-timeout-prs:
+    if: github.repository == 'ceilf6/code-tape'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

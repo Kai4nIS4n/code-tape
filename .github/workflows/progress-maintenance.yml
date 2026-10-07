@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   update-progress:
-    if: github.event.pull_request.merged == true
+    if: github.repository == 'ceilf6/code-tape' && github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

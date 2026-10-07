@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
+import { runInNewContext } from 'node:vm';
 
 import {
   hasStatus,
@@ -42,10 +43,10 @@ import {
 
 const standaloneCloudPlanPath = () => ['docs', '云端技术方案.md'].join('/');
 
-const validGitNexusSummary = [
+const validImpactSummary = [
   '- 风险等级: HIGH',
   '- 关键骨架变更: apps/web/src/shared/recording-schema/validators.ts',
-  '- GitNexus 影响面: detect_changes and context confirmed schema validators affect loader tests only.',
+  '- 影响分析: Schema validators affect loader tests only; the recording format is unchanged.',
   '- 验证结果: npm test passed',
 ].join('\n');
 
@@ -57,6 +58,25 @@ function checkoutStepBlock(workflow) {
 
 function checkoutStepFetchesLfs(workflow) {
   return /^ {10}lfs:\s*true\s*$/m.test(checkoutStepBlock(workflow));
+}
+
+function workflowJobCondition(workflow, job) {
+  const lines = workflow.split('\n');
+  const jobIndex = lines.indexOf(`  ${job}:`);
+  assert.ok(jobIndex >= 0, `workflow must include the ${job} job`);
+  const conditionIndex = lines.findIndex((line, index) => index > jobIndex && line.startsWith('    if:'));
+  assert.ok(conditionIndex > jobIndex, `${job} must have a job-level condition`);
+  const condition = lines[conditionIndex].slice('    if:'.length).trim();
+  const parts = [];
+  if (condition === '>') {
+    for (const line of lines.slice(conditionIndex + 1)) {
+      if (!/^ {6,}\S/u.test(line)) break;
+      parts.push(line.trim());
+    }
+  } else {
+    parts.push(condition);
+  }
+  return parts.join(' ').replace(/^\$\{\{\s*|\s*\}\}$/gu, '');
 }
 
 test('parseScore requires exactly one score label', () => {
@@ -740,7 +760,7 @@ test('evaluateGitNexusContract blocks critical changes without tests and impact 
 
   assert.equal(result.ok, false);
   assert.match(result.reasons.join('\n'), /Missing contract test/);
-  assert.match(result.reasons.join('\n'), /structured GitNexus impact summary/);
+  assert.match(result.reasons.join('\n'), /structured impact summary/);
   assert.ok(result.suggestions.some((line) => line.includes('detect_changes')));
 });
 
@@ -754,7 +774,7 @@ test('evaluateGitNexusContract rejects placeholder impact summaries', () => {
   });
 
   assert.equal(result.ok, false);
-  assert.match(result.reasons.join('\n'), /structured GitNexus impact summary/);
+  assert.match(result.reasons.join('\n'), /structured impact summary/);
 });
 
 test('evaluateGitNexusContract rejects unstructured impact summaries', () => {
@@ -767,52 +787,68 @@ test('evaluateGitNexusContract rejects unstructured impact summaries', () => {
   });
 
   assert.equal(result.ok, false);
-  assert.match(result.reasons.join('\n'), /Missing GitNexus impact summary field: 风险等级/);
+  assert.match(result.reasons.join('\n'), /Missing impact summary field: 风险等级/);
 });
 
 test('extractImpactSummary stops at the next PR template section', () => {
-  const summary = extractImpactSummary([
-    '## 变更说明',
-    '',
-    '-',
-    '',
-    '## GitNexus 影响分析摘要',
-    '',
-    '-',
-    '',
-    '## 自检',
-    '',
-    '- [ ] 已运行 npm run contract:local',
-  ].join('\n'));
+  for (const heading of ['## 影响分析摘要', '## GitNexus 影响分析摘要']) {
+    const summary = extractImpactSummary([
+      '## 变更说明',
+      '',
+      '-',
+      '',
+      heading,
+      '',
+      '-',
+      '',
+      '## 自检',
+      '',
+      '- [ ] 已运行 npm run contract:check',
+    ].join('\n'));
 
-  const result = evaluateGitNexusContract({
-    changedFiles: ['scripts/workflows/contract-check.mjs', 'scripts/tests/workflow-rules.test.mjs'],
-    impactSummary: summary,
-  });
+    const result = evaluateGitNexusContract({
+      changedFiles: ['scripts/workflows/contract-check.mjs', 'scripts/tests/workflow-rules.test.mjs'],
+      impactSummary: summary,
+    });
 
-  assert.equal(summary, '-');
-  assert.equal(result.ok, false);
-  assert.match(result.reasons.join('\n'), /structured GitNexus impact summary/);
+    assert.equal(summary, '-');
+    assert.equal(result.ok, false);
+    assert.match(result.reasons.join('\n'), /structured impact summary/);
+  }
 });
 
-test('pull request template references the control issue without closing it', () => {
+test('pull request template targets the fork without requiring an upstream control issue', () => {
   const template = readFileSync('.github/PULL_REQUEST_TEMPLATE.md', 'utf8');
 
-  assert.match(template, /Refs #2（总控 issue，不在本 PR 中关闭）/u);
+  assert.match(template, /Kai4nIS4n\/code-tape/u);
+  assert.doesNotMatch(template, /Refs #2/u);
   assert.doesNotMatch(template, /Closes #/u);
   assert.match(template, /## 改动点/u);
   assert.match(template, /## 影响范围/u);
-  assert.match(template, /## GitNexus 影响分析摘要/u);
+  assert.match(template, /## 影响分析摘要/u);
+  assert.match(template, /- 影响分析:/u);
   assert.match(template, /已说明改动点和影响范围/u);
 });
 
-test('evaluateGitNexusContract accepts critical changes with matching tests and impact summary', () => {
+test('evaluateGitNexusContract accepts tool-independent impact summaries for critical changes', () => {
   const result = evaluateGitNexusContract({
     changedFiles: [
       'apps/web/src/shared/recording-schema/validators.ts',
       'apps/web/src/shared/recording-schema/__tests__/validators.test.ts',
     ],
-    impactSummary: validGitNexusSummary,
+    impactSummary: validImpactSummary,
+  });
+
+  assert.equal(result.ok, true);
+});
+
+test('evaluateGitNexusContract accepts the legacy GitNexus impact field', () => {
+  const result = evaluateGitNexusContract({
+    changedFiles: [
+      'apps/web/src/shared/recording-schema/validators.ts',
+      'apps/web/src/shared/recording-schema/__tests__/validators.test.ts',
+    ],
+    impactSummary: validImpactSummary.replace('- 影响分析:', '- GitNexus 影响面:'),
   });
 
   assert.equal(result.ok, true);
@@ -836,11 +872,13 @@ test('README Harness documents local quality hooks', () => {
   assert.match(readme, /`pre-push` 运行 `npm run quality:local`/u);
 });
 
-test('agent prompts require codex review before final PR审查', () => {
+test('agent prompts require the fork CI and actual review comments before final PR审查', () => {
   for (const promptPath of ['AGENTS.md', 'CLAUDE.md']) {
     const prompt = readFileSync(promptPath, 'utf8');
 
-    assert.match(prompt, /repo-guard 和 codex 以及 Copilot 的评论后进行审查/u);
+    assert.match(prompt, /Kai4nIS4n\/code-tape/u);
+    assert.match(prompt, /GitHub Actions/u);
+    assert.match(prompt, /审查.*实际.*评论|实际.*评论.*审查/u);
   }
 });
 
@@ -1387,7 +1425,7 @@ test('root package exposes complete quality gate scripts', () => {
 
   assert.equal(pkg.scripts.prepare, 'npm run hooks:install');
   assert.equal(pkg.scripts['hooks:install'], 'node scripts/workflows/install-hooks.mjs');
-  assert.equal(pkg.scripts['quality:predev'], 'npm run hooks:install && npm run contract:local');
+  assert.equal(pkg.scripts['quality:predev'], 'npm run hooks:install');
   assert.equal(
     pkg.scripts['quality:precommit'],
     'npm test && npm run build:schema && npm run lint:web && npm run test:schema && npm run test:api && npm run test:web && npm run build',
@@ -1396,7 +1434,7 @@ test('root package exposes complete quality gate scripts', () => {
     pkg.scripts['quality:ci'],
     'npm test && npm run build:schema && npm run lint:web && npm run test:schema && npm run test:api && npm run test:web && npm run build && npm run e2e:web',
   );
-  assert.equal(pkg.scripts['quality:local'], 'npm run contract:local && npm run quality:ci');
+  assert.equal(pkg.scripts['quality:local'], 'npm run contract:check && npm run quality:ci');
 });
 
 test('api package test script runs compiled tests without shell glob expansion', () => {
@@ -1439,6 +1477,10 @@ test('agent prompts rely on git hooks for commit and push quality gates', () => 
 
   for (const prompt of [agentsPrompt, claudePrompt]) {
     assert.match(prompt, /开始任务前.*`npm run quality:predev`/u);
+    const bootstrapInstruction = prompt.split('\n').find((line) => line.includes('npm run agent:bootstrap'));
+    assert.match(bootstrapInstruction ?? '', /首次.*checkout|checkout.*首次/u);
+    assert.doesNotMatch(prompt, /在改代码前必须先运行 `npm run agent:bootstrap`/u);
+    assert.match(prompt, /Kai4nIS4n\/code-tape/u);
   }
 
   assert.match(bootstrapScript, /git commit so the pre-commit hook runs quality:precommit/u);
@@ -1463,14 +1505,19 @@ test('pages workflow deploys the web app with the GitHub Pages contract', () => 
   assert.match(workflow, /actions\/deploy-pages@v4/);
 });
 
-test('contract guard workflow uses a GitNexus-compatible Node runtime', () => {
+test('contract guard workflow keeps its required check enabled without GitNexus analysis', () => {
   const workflow = readFileSync('.github/workflows/contract-guard.yml', 'utf8');
 
   assert.match(workflow, /name:\s*Contract Guard/);
+  assert.match(workflow, /^ {2}gitnexus-contract:/m);
+  assert.match(workflow, /name:\s*Contract Guard \/ gitnexus-contract/u);
+  assert.match(workflow, /if:\s*github\.event_name == 'pull_request'/u);
   assert.match(workflow, /actions\/setup-node@v4/);
   assert.match(workflow, /node-version:\s*22/);
   assert.doesNotMatch(workflow, /node-version:\s*20/);
-  assert.match(workflow, /npm run contract:gitnexus/);
+  assert.match(workflow, /run:\s*npm run contract:check\s*$/m);
+  assert.doesNotMatch(workflow, /npm run contract:gitnexus/u);
+  assert.doesNotMatch(workflow, /continue-on-error:\s*true|if:\s*(?:\$\{\{\s*)?false\b/u);
 });
 
 test('repo guard supports fork pull requests without checking out PR code', () => {
@@ -1511,6 +1558,66 @@ test('training PR workflows use the bot token for checkout and API reads when av
   assert.match(guardWorkflow, /token:\s*\$\{\{\s*secrets\.TRAINING_BOT_TOKEN\s*\|\|\s*github\.token\s*\}\}/);
   assert.match(guardWorkflow, /GITHUB_TOKEN:\s*\$\{\{\s*secrets\.TRAINING_BOT_TOKEN\s*\|\|\s*secrets\.GITHUB_TOKEN\s*\}\}/);
   assert.match(autoMergeWorkflow, /token:\s*\$\{\{\s*secrets\.TRAINING_BOT_TOKEN\s*\|\|\s*github\.token\s*\}\}/);
+});
+
+test('training and intranet jobs preserve upstream entry points and skip the personal fork', () => {
+  const jobs = [
+    ['issue-claim', 'claim', ['issue_comment']],
+    ['labels', 'labels', ['workflow_dispatch']],
+    ['pr-guard', 'guard', ['pull_request_target']],
+    ['pr-auto-merge', 'auto-merge', ['workflow_run', 'pull_request_target']],
+    ['pr-timeout-close', 'close-timeout-prs', ['schedule', 'workflow_dispatch']],
+    ['progress-maintenance', 'update-progress', ['pull_request_target']],
+    ['repo-guard', 'guard', ['pull_request_target', 'issues', 'issue_comment']],
+  ];
+
+  for (const [workflowName, job, events] of jobs) {
+    const workflow = readFileSync(`.github/workflows/${workflowName}.yml`, 'utf8');
+    const condition = workflowJobCondition(workflow, job);
+    for (const eventName of events) {
+      for (const repository of ['ceilf6/code-tape', 'Kai4nIS4n/code-tape']) {
+        const github = {
+          repository,
+          actor: 'alice',
+          event_name: eventName,
+          event: {
+            issue: { pull_request: null, author_association: 'OWNER' },
+            comment: {
+              body: workflowName === 'issue-claim' ? '认领' : 'Review the workflow change.',
+              author_association: 'OWNER',
+            },
+            pull_request: { merged: true },
+            workflow_run: { conclusion: 'success' },
+          },
+        };
+        const enabled = runInNewContext(condition, {
+          github,
+          contains: (collection, value) => collection.includes(value),
+          fromJSON: JSON.parse,
+        });
+        assert.equal(enabled, repository === 'ceilf6/code-tape', `${workflowName}: ${repository} ${eventName}`);
+      }
+    }
+  }
+});
+
+test('quality and contract workflows remain available on the personal fork', () => {
+  for (const workflowName of ['workflow-tests', 'contract-guard']) {
+    const workflow = readFileSync(`.github/workflows/${workflowName}.yml`, 'utf8');
+
+    assert.match(workflow, /pull_request:/u);
+    assert.doesNotMatch(workflow, /github\.repository/u);
+    assert.doesNotMatch(workflow, /continue-on-error:\s*true|if:\s*(?:\$\{\{\s*)?false\b/u);
+  }
+});
+
+test('fork code ownership uses the personal maintainer', () => {
+  const owners = readFileSync('.github/CODEOWNERS', 'utf8');
+
+  for (const path of ['docs/progress.json', 'docs/progress.md', '.github/workflows/', 'scripts/workflows/']) {
+    assert.ok(owners.split('\n').includes(`${path} @Kai4nIS4n`));
+  }
+  assert.doesNotMatch(owners, /@ceilf6\b/u);
 });
 
 test('pages workflow avoids checkout-time Git LFS for generated model assets', () => {
