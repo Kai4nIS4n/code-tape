@@ -217,6 +217,56 @@ function watchState(scheduler: { subscribe(listener: (state: ReplaySchedulerStat
 }
 
 describe("createReplayScheduler", () => {
+  it("commits only the latest seek when slow media finishes out of order", async () => {
+    const completions = new Map<number, () => void>();
+    const adapter = testMediaAdapter({ currentTimeSec: () => 0, status: "ready" });
+    adapter.seek = (time) => new Promise<void>((resolve) => completions.set(time, resolve));
+    const onTick = vi.fn();
+    const scheduler = createReplayScheduler({ mediaAdapter: adapter as never, onTick, tickStrategy: { start: vi.fn(), stop: vi.fn() } });
+    const state = watchState(scheduler);
+    await scheduler.load(makePkg([content(1, 100, "first"), content(2, 900, "latest")], [], 5000, true));
+    scheduler.play();
+    const first = scheduler.seekWithResult(200);
+    const latest = scheduler.seekWithResult(1000);
+    completions.get(1000)!();
+    await expect(latest).resolves.toMatchObject({ status: "applied" });
+    expect(state().status).toBe("playing");
+    expect(scheduler.getStableState().editor.code).toBe("latest");
+    completions.get(200)!();
+    await expect(first).resolves.toMatchObject({ status: "superseded" });
+    expect(state().timelineTimeMs).toBe(1000);
+    expect(scheduler.getStableState().editor.code).toBe("latest");
+    expect(onTick).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates a pending seek when a different package loads", async () => {
+    let complete!: () => void;
+    const adapter = testMediaAdapter({ currentTimeSec: () => 0, status: "ready" });
+    adapter.seek = () => new Promise<void>((resolve) => { complete = resolve; });
+    const scheduler = createReplayScheduler({ mediaAdapter: adapter as never, tickStrategy: { start() {}, stop() {} } });
+    const state = watchState(scheduler);
+    await scheduler.load(makePkg([content(1, 100, "old")], [], 5000, true));
+    const pending = scheduler.seekWithResult(200);
+    await scheduler.load(makePkg([content(1, 100, "new")], [], 5000));
+    complete();
+    await expect(pending).resolves.toMatchObject({ status: "superseded" });
+    expect(state().status).toBe("ready");
+    expect(state().timelineTimeMs).toBe(0);
+    expect(scheduler.getStableState().editor.code).toBe("");
+  });
+
+  it("starts snapshot replay at upperBound instead of rereading the full prefix", async () => {
+    const reads = { reads: 0 };
+    const events = Array.from({ length: 2000 }, (_, index) => countedContent(index + 1, index + 1, String(index + 1), reads));
+    const pkg = makePkg(events, [], 5000);
+    pkg.snapshots = [{ id: "near-end", timestampMs: 1990, eventSeq: 1990, state: replayFromZeroTo(pkg, 1990) }];
+    const scheduler = createReplayScheduler({ tickStrategy: { start() {}, stop() {} } });
+    await scheduler.load(pkg);
+    reads.reads = 0;
+    await scheduler.seek(1995);
+    expect(scheduler.getStableState().editor.code).toBe("1995");
+    expect(reads.reads).toBeLessThan(100);
+  });
   it("INVARIANT: replay-from-zero produces the same stable state as seek(t)", async () => {
     const events: RecordingEvent[] = [];
     let code = "";

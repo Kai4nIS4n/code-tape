@@ -278,6 +278,6 @@ export type CloudRecordingRepository = {
   /** 软删除当前 owner 可访问的云端录制 */
   remove(recordingId: string): Promise<CloudResult<void>>;
 
-  /** 获取当前持久化的 owner token */
+  /** @deprecated 旧接口名称，仅返回当前账号 ID，不能作为认证凭据 */
   getOwnerToken(): string;
 };

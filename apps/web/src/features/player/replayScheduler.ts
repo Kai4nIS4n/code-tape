@@ -9,7 +9,7 @@ import type {
 } from "@/shared/recording-schema";
 import type { ReplayMediaClockAdapter } from "./mediaClockAdapter";
 import { buildInitialState, cloneState } from "./initialState";
-import { findSnapshotAtMost, buildReplayIndex } from "./replayIndex";
+import { findSnapshotAtMost, buildReplayIndex, upperBoundEventSeq } from "./replayIndex";
 import { replayReducer } from "./replayReducer";
 import { createTimelineClock } from "./timelineClock";
 
@@ -40,6 +40,8 @@ export type TickStrategy = {
   start(onFrame: () => void): void;
   stop(): void;
 };
+
+export type ReplaySeekResult = { status: "applied" | "superseded"; packageGeneration: number; seekGeneration: number };
 
 const DEFAULT_RAF_INTERVAL_MS = 1000 / 60;
 const MEDIA_DRIFT_THRESHOLD_MS = 250;
@@ -94,6 +96,9 @@ export function createReplayScheduler(options: ReplaySchedulerOptions = {}): Rep
   tick(): void;
   /** Test hook — exposes the latest stable state. */
   getStableState(): ReplayStableState;
+  seekWithResult(targetMs: number): Promise<ReplaySeekResult>;
+  isCurrentSeek(result: ReplaySeekResult): boolean;
+  invalidate(): void;
 } {
   const clock = options.clock ?? createTimelineClock();
   const tickStrategy = options.tickStrategy ?? defaultTickStrategy();
@@ -110,6 +115,9 @@ export function createReplayScheduler(options: ReplaySchedulerOptions = {}): Rep
   let mediaBlockedSinceMs: number | null = null;
   let mediaFallbackNotified = false;
   let nextEventIndex = 0;
+  let packageGeneration = 0;
+  let seekGeneration = 0;
+  let seekResume = false;
 
   let schedulerState: ReplaySchedulerState = {
     status: "loading",
@@ -144,7 +152,8 @@ export function createReplayScheduler(options: ReplaySchedulerOptions = {}): Rep
     const snapshot = findSnapshotAtMost(index.snapshotsByTime, targetMs);
     let state = snapshot ? cloneState(snapshot.state) : cloneState(initial);
     let lastSeq = snapshot ? snapshot.eventSeq : 0;
-    for (const event of index.stableEventsByTime) {
+    for (let cursor = upperBoundEventSeq(index.stableEventsByTime, lastSeq); cursor < index.stableEventsByTime.length; cursor += 1) {
+      const event = index.stableEventsByTime[cursor];
       if (event.timestampMs > targetMs) break;
       if (event.seq <= lastSeq) continue;
       state = replayReducer(state, event);
@@ -383,6 +392,43 @@ export function createReplayScheduler(options: ReplaySchedulerOptions = {}): Rep
     tickStrategy.start(tickOnce);
   };
 
+  const isCurrentSeek = (result: ReplaySeekResult) => result.packageGeneration === packageGeneration && result.seekGeneration === seekGeneration && pkg !== null;
+  const invalidate = () => {
+    packageGeneration += 1;
+    seekGeneration += 1;
+    mediaAdapter?.cancelPendingSeek?.();
+    tickStrategy.stop();
+    clock.pause();
+    driving = false;
+    pkg = null;
+  };
+  const seekWithResult = async (targetMs: number): Promise<ReplaySeekResult> => {
+    const result: ReplaySeekResult = { status: "superseded", packageGeneration, seekGeneration: ++seekGeneration };
+    if (!pkg) return result;
+    if (schedulerState.status !== "seeking") seekResume = schedulerState.status === "playing" || schedulerState.status === "buffering";
+    tickStrategy.stop();
+    clock.pause();
+    driving = false;
+    updateState({ status: "seeking" });
+    const clamped = Math.max(0, Math.min(targetMs, pkg.meta.durationMs));
+    const recomputed = recomputeFromTime(clamped);
+    const activeAdapter = mediaAdapter;
+    try {
+      if (activeAdapter) await activeAdapter.seek(clamped);
+    } catch (error) {
+      if (!isCurrentSeek(result)) return result;
+      reportMediaOperationError(error);
+    }
+    if (!isCurrentSeek(result)) return result;
+    stableState = recomputed.state;
+    nextEventIndex = findFirstEventIndexAfterSeq(recomputed.lastSeq);
+    clock.setBase(clamped);
+    updateState({ timelineTimeMs: clamped, lastAppliedSeq: recomputed.lastSeq, status: seekResume ? "playing" : "paused", mediaStatus: currentMediaStatus(), driftMs: 0 });
+    if (seekResume) { clock.play(); ensureDriving(); }
+    options.onTick?.(stableState, transientEventsForSeek(clamped), clamped);
+    return { ...result, status: "applied" };
+  };
+
   return {
     setMediaAdapter(adapter) {
       const adapterChanged = adapter !== mediaAdapter;
@@ -396,6 +442,7 @@ export function createReplayScheduler(options: ReplaySchedulerOptions = {}): Rep
       updateState({ mediaStatus });
     },
     async load(input) {
+      invalidate();
       pkg = input;
       index = buildReplayIndex(input);
       initial = buildInitialState(input);
@@ -414,6 +461,7 @@ export function createReplayScheduler(options: ReplaySchedulerOptions = {}): Rep
     },
     play() {
       if (!pkg) return;
+      if (schedulerState.status === "seeking") { seekResume = true; return; }
       if (schedulerState.status === "ended") {
         const { state, lastSeq } = recomputeFromTime(0);
         stableState = state;
@@ -435,33 +483,14 @@ export function createReplayScheduler(options: ReplaySchedulerOptions = {}): Rep
       ensureDriving();
     },
     pause() {
+      seekResume = false;
       clock.pause();
       tickStrategy.stop();
       driving = false;
       updateState({ status: "paused" });
     },
     async seek(targetMs) {
-      if (!pkg) return;
-      const shouldResumePlayback =
-        schedulerState.status === "playing" || schedulerState.status === "buffering";
-      tickStrategy.stop();
-      driving = false;
-      updateState({ status: "seeking" });
-      const clamped = Math.max(0, Math.min(targetMs, pkg.meta.durationMs));
-      const { state, lastSeq } = recomputeFromTime(clamped);
-      stableState = state;
-      nextEventIndex = findFirstEventIndexAfterSeq(lastSeq);
-      clock.setBase(clamped);
-      if (mediaAdapter) await mediaAdapter.seek(clamped);
-      updateState({
-        timelineTimeMs: clamped,
-        lastAppliedSeq: lastSeq,
-        status: shouldResumePlayback ? "playing" : "paused",
-        mediaStatus: currentMediaStatus(),
-        driftMs: 0,
-      });
-      if (shouldResumePlayback) ensureDriving();
-      options.onTick?.(stableState, transientEventsForSeek(clamped), clamped);
+      await seekWithResult(targetMs);
     },
     setRate(rate: ReplayPlaybackRate) {
       clock.setRate(rate);
@@ -475,7 +504,7 @@ export function createReplayScheduler(options: ReplaySchedulerOptions = {}): Rep
       /* Forwarded by the HTMLMediaElement driver. */
     },
     destroy() {
-      tickStrategy.stop();
+      invalidate();
       stateListeners.clear();
       driving = false;
       pkg = null;
@@ -487,6 +516,9 @@ export function createReplayScheduler(options: ReplaySchedulerOptions = {}): Rep
     },
     tick: tickOnce,
     getStableState: () => stableState,
+    seekWithResult,
+    isCurrentSeek,
+    invalidate,
   };
 }
 

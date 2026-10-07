@@ -6,6 +6,9 @@ import { createPackageBuilder } from "./packageBuilder";
 import { createRecordingController } from "./recordingController";
 import { RecorderControls } from "./RecorderControls";
 import { CodeEditor, type CodeEditorHandle } from "@/features/editor/CodeEditor";
+import type { CollaborationSession } from "@/features/collaboration/collaborationSession";
+import { CollaborationStatus } from "@/features/collaboration/CollaborationStatus";
+import { createCollaborativeRecordingProducer } from "@/features/capture/collaborativeRecordingProducer";
 import { CameraPreview } from "@/features/media/CameraPreview";
 import { PreviewPane } from "@/features/runtime-preview/PreviewPane";
 import { RuntimeOutputPanel } from "@/features/runtime-preview/RuntimeOutputPanel";
@@ -110,9 +113,10 @@ type EditorStateReader = {
  */
 export type RecorderPageProps = {
   onEventBusReady?: (bus: Pick<EventBus, "peek" | "subscribe">) => (() => void) | void;
+  collaboration?: CollaborationSession | null;
 };
 
-export function RecorderPage({ onEventBusReady }: RecorderPageProps = {}) {
+export function RecorderPage({ onEventBusReady, collaboration = null }: RecorderPageProps = {}) {
   const navigate = useNavigate();
   const theme = useTheme();
   const editorRef = useRef<CodeEditorHandle | null>(null);
@@ -128,6 +132,9 @@ export function RecorderPage({ onEventBusReady }: RecorderPageProps = {}) {
   const resourcesCleanedUpRef = useRef(false);
   const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
   const [persistenceNotice, setPersistenceNotice] = useState<string | null>(null);
+  const [collaborationState, setCollaborationState] = useState(() => collaboration?.getSnapshot() ?? null);
+  const [stopAwaitingSync, setStopAwaitingSync] = useState(false);
+  useEffect(() => collaboration?.subscribe(() => setCollaborationState(collaboration.getSnapshot())), [collaboration]);
 
   const stack = useMemo(() => {
     const clock = createRecordingClock();
@@ -158,12 +165,15 @@ export function RecorderPage({ onEventBusReady }: RecorderPageProps = {}) {
       clock,
       getEditor: () => editorRef.current?.getEditor() ?? null,
       getCurrentLanguage: () => currentEditorLanguage,
+      captureContent: !collaboration,
+      emitResumeBaseline: !collaboration,
       setModelLanguage: (_model, language) => {
         currentEditorLanguage = language;
         if (isScriptLanguage(language)) activeScriptLanguageRef.current = language;
         editorRef.current?.setModelLanguage(language);
       },
     });
+    const collaborativeProducer = collaboration ? createCollaborativeRecordingProducer({ session: collaboration, bus, clock, getCurrentLanguage: () => currentEditorLanguage }) : null;
     const pointerProducer = createPointerProducer({
       bus,
       clock,
@@ -180,15 +190,16 @@ export function RecorderPage({ onEventBusReady }: RecorderPageProps = {}) {
       devices,
       getCapability: () => currentMediaCapability,
     });
-    const runtimeProducer = createRuntimeProducer({ bus, clock, compiler, runtime });
+    const runtimeProducer = createRuntimeProducer({ bus, clock, compiler, runtime, shouldRecord: () => clock.status === "running" });
     const packageBuilder = createPackageBuilder();
     const controller = createRecordingController({
       clock,
       bus,
-      producers: [editorProducer, pointerProducer, shortcutProducer, mediaProducer, runtimeProducer],
+      producers: [...(collaborativeProducer ? [collaborativeProducer] : []), editorProducer, pointerProducer, shortcutProducer, mediaProducer, runtimeProducer],
       packageBuilder,
       repository,
       appVersion: APP_VERSION,
+      recordingPerspective: collaboration ? "candidate" : undefined,
       mediaSource: async () => {
         const recorder = mediaRecorderRef.current;
         mediaRecorderRef.current = null;
@@ -228,6 +239,7 @@ export function RecorderPage({ onEventBusReady }: RecorderPageProps = {}) {
       compiler,
       devices,
       editorProducer,
+      collaborativeProducer,
       mediaProducer,
       runtimeProducer,
       setCurrentMediaCapability: (capability: MediaCapability) => {
@@ -242,7 +254,7 @@ export function RecorderPage({ onEventBusReady }: RecorderPageProps = {}) {
       getCurrentRuntimeLanguage,
       getCurrentDurationMs: () => clock.durationMs(),
     };
-  }, []);
+  }, [collaboration]);
 
   const [controllerState, setControllerState] = useState<RecordingControllerState>(
     INITIAL_CONTROLLER_STATE,
@@ -272,7 +284,11 @@ export function RecorderPage({ onEventBusReady }: RecorderPageProps = {}) {
   const [runtimeState, setRuntimeState] = useState<RecorderRuntimeState>(INITIAL_RUNTIME_STATE);
 
   useEffect(() => {
-    return onEventBusReady?.(stack.bus) ?? undefined;
+    const bus = Object.assign(stack.bus, { flushPending: () => {
+      stack.collaborativeProducer?.flushPending("snapshot");
+      stack.editorProducer.flushPending("snapshot");
+    } });
+    return onEventBusReady?.(bus) ?? undefined;
   }, [onEventBusReady, stack.bus]);
 
   useEffect(() => {
@@ -526,7 +542,12 @@ export function RecorderPage({ onEventBusReady }: RecorderPageProps = {}) {
       startInFlightRef.current = false;
     }
   };
-  const handleStop = async () => {
+  const handleStop = async (finishVisible = false) => {
+    if (collaboration && !finishVisible && collaboration.getSnapshot().status !== "server-saved") {
+      setStopAwaitingSync(true);
+      return;
+    }
+    setStopAwaitingSync(false);
     clearAutoRunTimer();
     const stopToken = (stopTokenRef.current += 1);
     try {
@@ -564,6 +585,8 @@ export function RecorderPage({ onEventBusReady }: RecorderPageProps = {}) {
     if (stack.controller.state.status !== "recording") return;
     clearAutoRunTimer();
     const recorder = mediaRecorderRef.current;
+    stack.collaborativeProducer?.flushPending("pause");
+    stack.editorProducer.flushPending("pause");
     stack.controller.pause();
     try {
       recorder?.pause();
@@ -605,7 +628,7 @@ export function RecorderPage({ onEventBusReady }: RecorderPageProps = {}) {
     const editor = editorRef.current?.getEditor() as EditorStateReader | null;
     const next: RecordingDocumentState = editor
       ? {
-          code: editor.getValue(),
+          code: collaboration?.getText(language).toString() ?? editor.getValue(),
           cursor: editor.getPosition?.() ?? current.cursor,
           selection: editor.getSelection?.() ?? current.selection,
           scrollTop: editor.getScrollTop?.() ?? current.scrollTop,
@@ -620,6 +643,7 @@ export function RecorderPage({ onEventBusReady }: RecorderPageProps = {}) {
   };
 
   const editorDocumentsAsSources = (): Record<RecordingLanguage, string> => {
+    if (collaboration) return collaboration.getDocuments();
     return RECORDING_LANGUAGES.reduce((documents, language) => {
       documents[language] = editorDocumentsRef.current[language].code;
       return documents;
@@ -630,7 +654,7 @@ export function RecorderPage({ onEventBusReady }: RecorderPageProps = {}) {
     return RECORDING_LANGUAGES.reduce((documents, language) => {
       const document = editorDocumentsRef.current[language];
       documents[language] = {
-        code: document.code,
+        code: collaboration?.getText(language).toString() ?? document.code,
         cursor: document.cursor ? { ...document.cursor } : null,
         selection: document.selection ? { ...document.selection } : null,
         scrollTop: document.scrollTop,
@@ -668,6 +692,7 @@ export function RecorderPage({ onEventBusReady }: RecorderPageProps = {}) {
     if (!editor) return;
     const activeDocument = captureCurrentEditorDocument();
     stack.editorProducer.flushPending();
+    stack.collaborativeProducer?.flushPending("run");
     setRuntimeState({ status: "running", stdout: [], stderr: [], errorMessage: null });
     try {
       const result = await stack.runtimeProducer.trigger({
@@ -723,6 +748,7 @@ export function RecorderPage({ onEventBusReady }: RecorderPageProps = {}) {
     const nextDocument = editorDocumentsRef.current[next];
     const isRecording = stack.controller.state.status === "recording";
     if (isRecording) {
+      stack.collaborativeProducer?.flushPending("snapshot");
       stack.editorProducer.flushPending("snapshot");
     }
     setEditorLanguage(next);
@@ -732,7 +758,7 @@ export function RecorderPage({ onEventBusReady }: RecorderPageProps = {}) {
       stack.setCurrentEditorLanguage(next);
     }
     const editor = editorRef.current?.getEditor() as EditorStateReader | null;
-    if (editor) {
+    if (editor && !collaboration) {
       if (isRecording) {
         stack.editorProducer.runWithoutCapturingChanges(() => {
           restoreEditorDocument(editor, nextDocument);
@@ -753,6 +779,12 @@ export function RecorderPage({ onEventBusReady }: RecorderPageProps = {}) {
 
   return (
     <div className="flex h-full flex-col" data-recorder-host>
+      {collaboration ? <CollaborationStatus session={collaboration} /> : null}
+      {stopAwaitingSync ? <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3 text-sm" role="alert">
+        <span>本机修改还未获得服务端保存确认。录制只包含候选人当前可见内容。</span>
+        <button type="button" className="underline" onClick={() => setStopAwaitingSync(false)}>继续录制，等待同步后再结束</button>
+        <button type="button" className="underline" onClick={() => void handleStop(true)}>结束当前可见内容录制</button>
+      </div> : null}
       <RecorderControls
         state={displayControllerState}
         microphoneEnabled={microphoneEnabled}
@@ -760,7 +792,7 @@ export function RecorderPage({ onEventBusReady }: RecorderPageProps = {}) {
         onStart={handleStart}
         onPause={handlePause}
         onResume={handleResume}
-        onStop={handleStop}
+        onStop={() => handleStop()}
         onToggleMicrophone={(next) => {
           if (stack.controller.state.status === "paused") return;
           setMicrophoneEnabled(next);
@@ -811,10 +843,11 @@ export function RecorderPage({ onEventBusReady }: RecorderPageProps = {}) {
               ref={editorRef}
               language={editorLanguage}
               initialValue=""
+              collaboration={collaboration}
               fontSize={editorFontSize}
               theme={theme.resolved}
               minHeight="compact"
-              readOnly={controllerState.status === "paused"}
+              readOnly={collaboration ? !collaborationState?.ready || collaborationState.status === "revoked" : controllerState.status === "paused"}
               onChange={handleEditorChange}
               onCommand={(command) => {
                 if (command === "run") void handleRun();

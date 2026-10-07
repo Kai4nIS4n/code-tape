@@ -31,7 +31,7 @@ export function InterviewLobbyPage() {
           <h1 className="font-display text-xl font-semibold">实时面试</h1>
         </div>
         <p className="mt-2 text-sm text-muted">
-          选择你的角色加入这场远程面试：候选人发起房间并录制讲解，面试官通过分享链接实时旁观并语音视频沟通。
+          候选人发起房间并录制讲解，受邀面试官登录后与候选人共同编辑代码，也可以语音视频沟通。
         </p>
 
         <div className="mt-6 grid gap-4 lg:grid-cols-2">
@@ -59,7 +59,7 @@ export function InterviewLobbyPage() {
               <h2 className="text-base font-semibold">我是面试官</h2>
             </div>
             <p className="mt-2 text-sm leading-6 text-muted">
-              粘贴候选人分享的面试官链接（含 joinCode），加入后即可只读查看候选人编辑器并进行双向音视频通话。
+              粘贴候选人分享的邀请链接（含 joinCode），加入后可以共同编辑、离线修改后合并，并进行自己的本地试跑。
             </p>
             <form className="mt-4 flex flex-col gap-2" onSubmit={handleJoin}>
               <label htmlFor="interviewer-link" className="text-xs font-medium text-muted">

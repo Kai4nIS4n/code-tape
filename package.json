@@ -46,6 +46,6 @@
     "test": "node --test scripts/tests/*.test.mjs"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=24"
   }
 }

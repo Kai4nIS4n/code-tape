@@ -1,6 +1,9 @@
 import { readFile, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, resolve, sep } from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { createSecureRuntime, type SecureRuntimeOptions, type SecureRuntime } from "./secureRuntime.js";
 import { createCloudRecordingService } from "../cloud/cloudRecordingService.js";
 import { createAuthTokenService } from "../cloud/authTokenService.js";
 import { createLocalDevObjectStorage } from "../cloud/localDevObjectStorage.js";
@@ -15,15 +18,18 @@ import { createLocalDevObjectStorageHandler } from "../http/localDevObjectStorag
 import { createInterviewSignalingServer } from "../signaling/interviewSignalingServer.js";
 import { createInterviewWebSocketUpgradeHandler } from "../signaling/interviewWebSocketUpgradeHandler.js";
 
-export type DemoRequestHandlerOptions = {
+export type DemoRequestHandlerOptions = SecureRuntimeOptions & {
   webRoot: string;
   publicBaseUrl?: string;
   createRequestId?: () => string;
+  /** Only old service fixtures may enable the anonymous in-memory adapter. */
+  legacyTestMode?: boolean;
 };
 
 export type DemoRuntime = {
   handler: CloudApiHandler;
   server: Server;
+  controls?: SecureRuntime;
   close(): void;
 };
 
@@ -32,6 +38,7 @@ export function createDemoRequestHandler(options: DemoRequestHandlerOptions): Cl
 }
 
 export function createDemoRuntime(options: DemoRequestHandlerOptions): DemoRuntime {
+  if (!options.legacyTestMode) return createAuthenticatedDemoRuntime(options);
   const webRoot = resolve(options.webRoot);
   const metadata = createMemoryMetadataRepository();
   const objectStorage = createLocalDevObjectStorage({
@@ -87,6 +94,21 @@ export function createDemoRuntime(options: DemoRequestHandlerOptions): DemoRunti
       upgrade.close();
     },
   };
+}
+
+function createAuthenticatedDemoRuntime(options: DemoRequestHandlerOptions): DemoRuntime {
+  const runtime = createSecureRuntime(options);
+  const webRoot = resolve(options.webRoot);
+  const handler: CloudApiHandler = request => {
+    const path = new URL(request.url).pathname;
+    return isDemoApiPath(path) ? runtime.handler(request) : serveStatic({ request, webRoot });
+  };
+  const server = createServer((incoming, outgoing) => { void sendNodeResponse(handler, incoming, outgoing); });
+  server.on("upgrade", (request, socket, head) => {
+    if (runtime.sockets.canHandle(request)) runtime.sockets.handleUpgrade(request, socket, head);
+    else socket.destroy();
+  });
+  return {handler,server,controls:runtime,close:()=>runtime.close()};
 }
 
 async function serveStatic(input: {
@@ -184,7 +206,8 @@ async function sendNodeResponse(
     const response = await handler(request);
     outgoing.statusCode = response.status;
     response.headers.forEach((value, key) => outgoing.setHeader(key, value));
-    outgoing.end(Buffer.from(await response.arrayBuffer()));
+    if (response.body) await pipeline(Readable.fromWeb(response.body as import("node:stream/web").ReadableStream), outgoing);
+    else outgoing.end();
   } catch (error) {
     outgoing.statusCode = 500;
     outgoing.setHeader("content-type", "text/plain; charset=utf-8");
@@ -197,7 +220,7 @@ async function toWebRequest(incoming: IncomingMessage): Promise<Request> {
   const body = await readIncomingBody(incoming);
   return new Request(url, {
     method: incoming.method,
-    headers: incoming.headers as HeadersInit,
+    headers: { ...incoming.headers as Record<string,string>, "x-code-tape-peer": incoming.socket.remoteAddress ?? "unknown" },
     body: body.byteLength > 0 ? new Uint8Array(body) : undefined,
   });
 }
@@ -205,7 +228,13 @@ async function toWebRequest(incoming: IncomingMessage): Promise<Request> {
 function readIncomingBody(incoming: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    incoming.on("data", (chunk: Buffer) => chunks.push(chunk));
+    let size = 0;
+    const limit = incoming.url?.startsWith("/api/uploads/") ? 250 * 1024 * 1024 : 2 * 1024 * 1024;
+    incoming.on("data", (chunk: Buffer) => {
+      size += chunk.byteLength;
+      if (size > limit) { reject(new Error("request body exceeds upload budget")); incoming.destroy(); return; }
+      chunks.push(chunk);
+    });
     incoming.on("end", () => resolve(Buffer.concat(chunks)));
     incoming.on("error", reject);
   });

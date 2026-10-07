@@ -14,6 +14,7 @@ import type {
 
 export type RecordingControllerOptions = RecordingControllerDeps & {
   appVersion: string;
+  recordingPerspective?: "candidate";
   generateTitle?: () => string;
   mediaSource?: () => Promise<PackageBuildInput["media"]>;
   onPersistenceFailure?: (failure: RecordingPersistenceFailure) => void | Promise<void>;
@@ -181,6 +182,8 @@ export function createRecordingController(options: RecordingControllerOptions): 
               appVersion: options.appVersion,
               ownerId: null,
               creatorInfo: null,
+              recordingPerspective: options.recordingPerspective,
+              documents: options.recordingPerspective ? ["source:javascript", "source:typescript", "source:python", "source:html", "source:css"] : undefined,
               initialLanguage: startPayload.initialLanguage,
               initialActiveScriptLanguage: startPayload.initialActiveScriptLanguage,
               initialDocuments: startPayload.initialDocuments,

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useParams } from "react-router-dom";
+import { Navigate, useParams } from "react-router-dom";
 import {
   Check,
   CircleDot,
@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { routerBasename } from "@/app/routerBase";
 import { RecorderPage } from "@/features/recorder/RecorderPage";
+import { useCollaborationRoom } from "@/features/collaboration/useCollaborationRoom";
 import type { EventBus } from "@/shared/recording-schema";
 import { Toggle, Tooltip } from "@/shared/ui";
 import {
@@ -81,7 +82,7 @@ export type CandidateInterviewPageProps = {
   };
 };
 
-type RecorderEventBusSubscription = Pick<EventBus, "peek" | "subscribe">;
+type RecorderEventBusSubscription = Pick<EventBus, "peek" | "subscribe"> & { flushPending?: () => void };
 
 type CandidateRealtimePublisherContext = {
   channel: InterviewEventsDataChannel;
@@ -123,6 +124,9 @@ export function CandidateInterviewPage({ deps = {} }: CandidateInterviewPageProp
     createSignalingClient,
     createMediaSession,
   });
+  const collaboration = useCollaborationRoom(session.roomId);
+
+  if (collaboration.role === "interviewer" && session.roomId) return <Navigate to={`/interview/interviewer/${encodeURIComponent(session.roomId)}`} replace />;
 
   return (
     <CandidateInterviewView
@@ -130,7 +134,7 @@ export function CandidateInterviewPage({ deps = {} }: CandidateInterviewPageProp
       roomState={session.roomState}
       mediaState={session.mediaState}
       onEndInterview={session.endInterview}
-      recordingWorkspace={<RecorderPage onEventBusReady={session.onEventBusReady} />}
+      recordingWorkspace={collaboration.session ? <RecorderPage key={session.roomId} collaboration={collaboration.session} onEventBusReady={session.onEventBusReady} /> : <p className="p-6 text-sm text-muted">{collaboration.error ?? "正在加载协同工作区…"}</p>}
     />
   );
 }
@@ -228,6 +232,7 @@ function useCandidateInterviewRoomSession({
     const handleSnapshotRequest = (event: { data: unknown }) => {
       const request = parseSnapshotRequestMessage(event.data);
       if (!request || request.roomId !== context.roomId) return;
+      recorderEventBusRef.current?.flushPending?.();
       realtimePublisherRef.current?.publishSnapshot();
     };
     handleSnapshotRequestMessageRef.current = handleSnapshotRequest;
@@ -288,16 +293,6 @@ function useCandidateInterviewRoomSession({
       mediaSession === currentMediaSession &&
       mediaSessionVersion === currentMediaSessionVersion;
 
-    if (routeRoomId) {
-      roomCreationRef.current = null;
-      setMediaState(EMPTY_CANDIDATE_MEDIA_STATE);
-      setSession({
-        roomId: routeRoomId,
-        roomState: initialCandidateRoomState(routeRoomId),
-      });
-      return undefined;
-    }
-
     setSession({
       roomId: null,
       roomState: {
@@ -309,7 +304,7 @@ function useCandidateInterviewRoomSession({
     setMediaState(EMPTY_CANDIDATE_MEDIA_STATE);
 
     if (!roomCreationRef.current || roomCreationRef.current.roomClient !== roomClient) {
-      roomCreationRef.current = { roomClient, request: roomClient.createRoom() };
+      roomCreationRef.current = { roomClient, request: routeRoomId ? roomClient.getRoom(routeRoomId, "").then((result) => result.ok ? { ok: true as const, value: { ...result.value, joinCode: result.value.joinCode ?? "" } } : result) : roomClient.createRoom() };
     }
     const roomRequest = roomCreationRef.current.request;
 
@@ -422,7 +417,7 @@ function useCandidateInterviewRoomSession({
             if (!currentMediaSession) {
               throw new Error("candidate media session is not available");
             }
-            await currentMediaSession.requestLocalMedia();
+            try { await currentMediaSession.requestLocalMedia(); } catch { /* A denied microphone must not block the data channel. */ }
             if (!isCurrentMediaSession(currentMediaSession, currentMediaSessionVersion)) {
               return;
             }
@@ -595,8 +590,6 @@ function useCandidateInterviewRoomSession({
         }
       };
 
-      if (!openMediaSession()) return;
-
       setSession({
         roomId: room.roomId,
         roomState: {
@@ -607,6 +600,8 @@ function useCandidateInterviewRoomSession({
           signalingUrl: room.signalingUrl,
         },
       });
+
+      if (!openMediaSession()) return;
 
       signalingClient = createSignalingClient({
         roomId: room.roomId,

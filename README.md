@@ -8,6 +8,8 @@
 
 当前个人升级的提交、推送和 PR 目标为 [Kai4nIS4n/code-tape](https://github.com/Kai4nIS4n/code-tape)。默认在这个 fork 内完成分支开发与审查，不向上游提交 PR。下述培训认领/计分机制仅适用于参与上游协作，个人升级不要求上游 Issue 或维护者确认。
 
+功能升级的开发与 CI 使用 Node.js 24 LTS（见 `.nvmrc`），安装依赖后运行本地 Web 与 API。账号和协同服务的数据目录默认 `.code-tape-data/`，生产 JWT 密钥必须通过环境配置，不能把私有数据目录或密钥提交到 Git。
+
 > [规范工作流程](docs/规范工作流程.md)
 | [技术模块拆解](docs/技术模块拆解.md)
 | [项目时间规划](docs/项目时间规划.md)

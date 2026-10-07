@@ -37,6 +37,9 @@ export type EditorProducerDeps = ProducerCommonDeps & {
   getEditor(): MonacoEditor.IStandaloneCodeEditor | null;
   /** Reports the *current* editor language so language-change events can be deduped. */
   getCurrentLanguage(): RecordingLanguage;
+  /** Collaborative正文 is captured once by the Y.Text producer instead. */
+  captureContent?: boolean;
+  emitResumeBaseline?: boolean;
   /** Applies a producer-driven language change to the current Monaco model. */
   setModelLanguage?(
     model: MonacoEditor.ITextModel,
@@ -115,6 +118,7 @@ export type CreateMediaProducer = (deps: MediaProducerDeps) => MediaProducerHand
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type RuntimeProducerDeps = ProducerCommonDeps & {
+  shouldRecord?(): boolean;
   compiler: PreviewCompiler;
   runtime: IframeRuntime;
 };

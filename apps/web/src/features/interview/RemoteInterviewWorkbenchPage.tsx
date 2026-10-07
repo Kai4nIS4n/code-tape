@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
+import { Navigate, useParams, useSearchParams } from "react-router-dom";
 import {
   CircleDot,
   Mic,
@@ -12,6 +12,9 @@ import {
   VideoOff,
 } from "lucide-react";
 import { CodeEditor } from "@/features/editor/CodeEditor";
+import { useCollaborationRoom } from "@/features/collaboration/useCollaborationRoom";
+import { CollaborativeEditorWorkspace } from "@/features/collaboration/CollaborativeEditorWorkspace";
+import type { CollaborationSession } from "@/features/collaboration/collaborationSession";
 import { PreviewPane } from "@/features/runtime-preview/PreviewPane";
 import { RuntimeOutputPanel } from "@/features/runtime-preview/RuntimeOutputPanel";
 import { createIframeRuntime } from "@/features/runtime-preview/iframeRuntime";
@@ -53,6 +56,7 @@ export type RemoteInterviewConnectionState = {
 };
 
 export type RemoteInterviewWorkbenchViewProps = {
+  collaboration?: CollaborationSession | null;
   roomId: string;
   workbenchState: RemoteInterviewWorkbenchState;
   mediaState: InterviewMediaSessionState;
@@ -139,6 +143,7 @@ function RemoteInterviewWorkbenchRoom({
   );
   const [sessionEpoch, setSessionEpoch] = useState(0);
   const lastRequestedGapRef = useRef<string | null>(null);
+  const collaboration = useCollaborationRoom(roomId, joinCode);
 
   useEffect(() => workbench.subscribe(setWorkbenchState), [workbench]);
   useEffect(() => {
@@ -248,8 +253,10 @@ function RemoteInterviewWorkbenchRoom({
     [mediaSession],
   );
 
+  if (collaboration.role === "candidate") return <Navigate to={`/interview/candidate/${encodeURIComponent(roomId)}`} replace />;
   return (
     <RemoteInterviewWorkbenchView
+      collaboration={collaboration.session}
       roomId={roomId}
       workbenchState={workbenchState}
       mediaState={mediaState}
@@ -279,14 +286,6 @@ function connectInterviewerSignaling({
   onConnectionState: (state: RemoteInterviewConnectionState) => void;
   onCandidateLeft: () => void;
 }): () => void {
-  if (!joinCode) {
-    onConnectionState({
-      status: "missing-join-code",
-      errorMessage: "缺少 joinCode，无法加入面试房间",
-    });
-    return () => {};
-  }
-
   let closed = false;
   let signalingClient: InterviewSignalingClient | null = null;
   let unsubscribeMediaSession: (() => void) | null = null;
@@ -378,7 +377,7 @@ function connectInterviewerSignaling({
     onConnectionState({ status: "connecting", errorMessage: null });
     void (async () => {
       try {
-        await mediaSession.requestLocalMedia();
+        try { await mediaSession.requestLocalMedia(); } catch { /* Receive-only media and collaboration remain available. */ }
         if (closed) return;
         await mediaSession.setRemoteDescription({ type: "offer", sdp });
         if (closed) return;
@@ -471,7 +470,7 @@ function connectInterviewerSignaling({
 
   onConnectionState({ status: "validating-room", errorMessage: null });
   void roomClient
-    .getRoom(roomId, joinCode)
+    .getRoom(roomId, joinCode ?? "")
     .then((result) => {
       if (closed) return;
       if (!result.ok) {
@@ -488,7 +487,7 @@ function connectInterviewerSignaling({
       signalingClient = createSignalingClient({
         roomId,
         role: "interviewer",
-        joinCode,
+        joinCode: result.value.joinCode ?? joinCode ?? "",
         signalingUrl: result.value.signalingUrl,
         onMessage: handleMessage,
         onError: (error) => failAndStopMedia(error.message),
@@ -510,7 +509,7 @@ type ParsedJoinCode =
   | { status: "invalid"; key: string; joinCode: null }
   | { status: "valid"; key: string; joinCode: string };
 
-const JOIN_CODE_PATTERN = /^[0-9A-Za-z]{8}$/u;
+const JOIN_CODE_PATTERN = /^(?:[0-9A-Za-z]{8}|[0-9A-Za-z_-]{32,128})$/u;
 
 function parseJoinCode(value: string | null): ParsedJoinCode {
   const trimmed = value?.trim();
@@ -573,6 +572,7 @@ function emptyInterviewMediaSessionState(): InterviewMediaSessionState {
 }
 
 export function RemoteInterviewWorkbenchView({
+  collaboration,
   roomId,
   workbenchState,
   mediaState,
@@ -636,16 +636,16 @@ export function RemoteInterviewWorkbenchView({
           aria-label="候选人编辑器"
           className="relative flex min-h-0 flex-col border-r border-border"
         >
-          <div className="flex min-h-11 flex-wrap items-center gap-3 border-b border-border bg-background px-4 py-2 text-xs text-muted">
+          {!collaboration ? <div className="flex min-h-11 flex-wrap items-center gap-3 border-b border-border bg-background px-4 py-2 text-xs text-muted">
             <span className="font-mono uppercase tracking-normal text-foreground">
               {editor.language}
             </span>
             <span>font {editor.fontSize}px</span>
             <span>applied seq {workbenchState.lastAppliedSeq}</span>
             <span>next seq {workbenchState.expectedSeq}</span>
-          </div>
+          </div> : null}
           <div className="relative min-h-0 flex-1">
-            <CodeEditor
+            {collaboration ? <CollaborativeEditorWorkspace session={collaboration} /> : <CodeEditor
               language={editor.language}
               initialValue={editor.code}
               value={editor.code}
@@ -656,7 +656,7 @@ export function RemoteInterviewWorkbenchView({
               selection={editor.selection}
               scrollTop={editor.scrollTop}
               scrollLeft={editor.scrollLeft}
-            />
+            />}
             <div className="pointer-events-none absolute bottom-4 right-4 z-50 h-32 w-32 overflow-hidden rounded-full border border-border bg-surface-raised shadow-elevation-2">
               <MediaVideo
                 stream={mediaState.remoteStream}

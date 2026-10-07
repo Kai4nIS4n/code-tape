@@ -42,6 +42,8 @@ const RECORDING_LANGUAGES = [
   "javascript",
   "typescript",
   "python",
+  "html",
+  "css",
 ] as const satisfies readonly RecordingLanguage[];
 const RECORDING_LANGUAGE_SET = new Set<string>(RECORDING_LANGUAGES);
 const MAX_UPLOAD_SCALAR_LENGTH = 128;
@@ -690,7 +692,7 @@ async function resolveExistingUploadSession(input: {
 }
 
 function validateCreateUploadSessionInput(input: CreateUploadSessionRequest): CloudApiError | null {
-  if (input.schemaVersion !== RECORDING_SCHEMA_VERSION) {
+  if (input.schemaVersion !== RECORDING_SCHEMA_VERSION && input.schemaVersion !== "0.1.0") {
     return {
       code: "unsupported-schema",
       message: `unsupported schemaVersion: ${input.schemaVersion}`,

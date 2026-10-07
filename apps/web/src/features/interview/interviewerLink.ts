@@ -1,4 +1,4 @@
-const JOIN_CODE_PATTERN = /^[0-9A-Za-z]{8}$/u;
+const JOIN_CODE_PATTERN = /^(?:[0-9A-Za-z]{8}|[0-9A-Za-z_-]{32,128})$/u;
 
 export type ParsedInterviewerLink =
   | { ok: true; roomId: string; joinCode: string }

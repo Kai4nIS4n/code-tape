@@ -2,8 +2,9 @@ import { Outlet, NavLink } from "react-router-dom";
 import { Github, Monitor, Moon, Sun } from "lucide-react";
 import { Tooltip, type ThemeMode, type ThemePreference } from "@/shared/ui";
 import { useTheme } from "@/shared/ui/useTheme";
+import { useAuth } from "@/features/auth/useAuth";
 
-const GITHUB_REPOSITORY_URL = "https://github.com/ceilf6/code-tape";
+const GITHUB_REPOSITORY_URL = "https://github.com/Kai4nIS4n/code-tape";
 
 const THEME_PREFERENCE_LABEL: Record<ThemePreference, string> = {
   system: "跟随系统",
@@ -24,6 +25,7 @@ const THEME_MODE_LABEL: Record<ThemeMode, string> = {
  */
 export function AppShell() {
   const theme = useTheme();
+  const auth = useAuth();
   const themeStatusLabel = `主题偏好，当前偏好：${THEME_PREFERENCE_LABEL[theme.preference]}，当前生效：${THEME_MODE_LABEL[theme.resolved]}`;
   const themeOptions: Array<{
     preference: ThemePreference;
@@ -77,6 +79,13 @@ export function AppShell() {
           </NavLink>
         </nav>
         <span className="flex-1" />
+        {auth.user ? (
+          <div className="flex items-center gap-2 text-xs">
+            <span className="max-w-28 truncate" title={auth.user.username}>{auth.user.displayName}</span>
+            <button type="button" onClick={() => void auth.client.logout().catch(() => undefined)} className="rounded-md px-2 py-1 text-muted hover:bg-surface-raised">退出</button>
+          </div>
+        ) : <NavLink to="/login" className="rounded-md px-2 py-1 text-xs text-primary">{auth.status === "loading" ? "恢复账号…" : "登录"}</NavLink>}
+        {auth.error && <span role="alert" className="max-w-48 truncate text-xs text-red-400" title={auth.error}>{auth.error}</span>}
         <Tooltip content="打开 GitHub 仓库">
           <a
             href={GITHUB_REPOSITORY_URL}

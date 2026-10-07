@@ -9,6 +9,7 @@ import type {
 type SerializablePostProcessorInput = {
   track: SubtitleTrack;
   context?: SubtitlePostProcessorContext;
+  strictValidation?: boolean;
 };
 
 type WorkerRequest =

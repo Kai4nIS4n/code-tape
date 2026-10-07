@@ -83,7 +83,7 @@ function validateManifest(value: unknown, errors: SchemaValidationIssue[]): void
     return;
   }
   expectString(value.packageId, "manifest.packageId", errors);
-  if (value.schemaVersion !== RECORDING_SCHEMA_VERSION) {
+  if (value.schemaVersion !== RECORDING_SCHEMA_VERSION && value.schemaVersion !== "0.1.0") {
     pushIssue(errors, "manifest.schemaVersion", `unsupported schema version: ${String(value.schemaVersion)}`);
   }
   if (value.status !== "draft" && value.status !== "complete") {
@@ -170,6 +170,13 @@ function validateEventPayload(
   if (!isPlainObject(payload)) {
     pushIssue(errors, path, "payload must be an object");
     return;
+  }
+  if (payload.documentId !== undefined) {
+    expectOneOf(payload.documentId, Array.from(LANGUAGES, (language) => `source:${language}`), `${path}.documentId`, errors);
+  }
+  if (payload.inputDocumentsHash !== undefined) expectString(payload.inputDocumentsHash, `${path}.inputDocumentsHash`, errors);
+  if (type === "content-change" && payload.documentId !== undefined && payload.documentId !== `source:${String(payload.language)}`) {
+    pushIssue(errors, `${path}.documentId`, "documentId must match language");
   }
   switch (type) {
     case "record-start":
@@ -394,11 +401,14 @@ export function validateRecordingPackageV1(input: unknown): SchemaValidationResu
   if (!isPlainObject(input)) {
     return { ok: false, errors: [{ path: "$", message: "package must be an object" }] };
   }
-  if (input.schemaVersion !== RECORDING_SCHEMA_VERSION) {
+  if (input.schemaVersion !== RECORDING_SCHEMA_VERSION && input.schemaVersion !== "0.1.0") {
     errors.push({
       path: "schemaVersion",
       message: `unsupported schemaVersion: ${String(input.schemaVersion)}`,
     });
+  }
+  if (isPlainObject(input.manifest) && input.manifest.schemaVersion !== input.schemaVersion) {
+    pushIssue(errors, "manifest.schemaVersion", "manifest and package version must match");
   }
   validateManifest(input.manifest, errors);
   validateMeta(input.meta, errors);

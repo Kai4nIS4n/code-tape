@@ -11,16 +11,19 @@ export const SUBTITLE_LLM_CONFIG_STORAGE_KEY = "code-tape:subtitle-llm";
 
 const VALID_PROVIDERS: ReadonlySet<string> = new Set<ExternalLlmProvider>(["openai", "anthropic"]);
 
-// Persisted in localStorage only. The API key never leaves the user's browser
-// except in the direct request to their configured endpoint; it is not bundled,
-// logged, or sent to any code-tape backend.
+// Keys are session-scoped unless the user explicitly opts into remembering them.
 export function loadExternalLlmConfig(
-  storage: Pick<Storage, "getItem"> | undefined = safeStorage(),
+  storage?: Pick<Storage, "getItem">,
 ): ExternalLlmConfig | null {
-  if (!storage) return null;
+  const selected = storage ?? safeStorage("session");
+  if (!selected) return null;
   let raw: string | null;
   try {
-    raw = storage.getItem(SUBTITLE_LLM_CONFIG_STORAGE_KEY);
+    raw = selected.getItem(SUBTITLE_LLM_CONFIG_STORAGE_KEY);
+    if (!raw && !storage) {
+      const persisted = safeStorage("local")?.getItem(SUBTITLE_LLM_CONFIG_STORAGE_KEY);
+      if (persisted && JSON.parse(persisted).rememberKey === true) raw = persisted;
+    }
   } catch {
     return null;
   }
@@ -34,11 +37,18 @@ export function loadExternalLlmConfig(
 
 export function saveExternalLlmConfig(
   config: ExternalLlmConfig,
-  storage: Pick<Storage, "setItem"> | undefined = safeStorage(),
+  storage?: Pick<Storage, "setItem">,
+  options: { rememberKey?: boolean } = {},
 ): void {
-  if (!storage) return;
+  const selected = storage ?? safeStorage("session");
+  if (!selected) return;
   try {
-    storage.setItem(SUBTITLE_LLM_CONFIG_STORAGE_KEY, JSON.stringify(normalizeConfigStrict(config)));
+    const value = normalizeConfigStrict(config);
+    selected.setItem(SUBTITLE_LLM_CONFIG_STORAGE_KEY, JSON.stringify(value));
+    if (!storage) {
+      if (options.rememberKey) safeStorage("local")?.setItem(SUBTITLE_LLM_CONFIG_STORAGE_KEY, JSON.stringify({ ...value, rememberKey: true }));
+      else safeStorage("local")?.removeItem(SUBTITLE_LLM_CONFIG_STORAGE_KEY);
+    }
   } catch {
     // localStorage can be unavailable (private mode / disabled). Config simply
     // does not persist; the app falls back to the local model.
@@ -46,11 +56,11 @@ export function saveExternalLlmConfig(
 }
 
 export function clearExternalLlmConfig(
-  storage: Pick<Storage, "removeItem"> | undefined = safeStorage(),
+  storage?: Pick<Storage, "removeItem">,
 ): void {
-  if (!storage) return;
   try {
-    storage.removeItem(SUBTITLE_LLM_CONFIG_STORAGE_KEY);
+    if (storage) storage.removeItem(SUBTITLE_LLM_CONFIG_STORAGE_KEY);
+    else { safeStorage("session")?.removeItem(SUBTITLE_LLM_CONFIG_STORAGE_KEY); safeStorage("local")?.removeItem(SUBTITLE_LLM_CONFIG_STORAGE_KEY); }
   } catch {
     // ignore
   }
@@ -88,9 +98,9 @@ function normalizeConfigStrict(config: ExternalLlmConfig): ExternalLlmConfig {
   };
 }
 
-function safeStorage(): Storage | undefined {
+function safeStorage(kind: "local" | "session"): Storage | undefined {
   try {
-    return typeof globalThis !== "undefined" ? globalThis.localStorage : undefined;
+    return typeof globalThis !== "undefined" ? kind === "session" ? globalThis.sessionStorage : globalThis.localStorage : undefined;
   } catch {
     return undefined;
   }

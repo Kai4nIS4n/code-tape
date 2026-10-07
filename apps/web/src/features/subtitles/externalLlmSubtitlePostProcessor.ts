@@ -60,6 +60,7 @@ export function createExternalLlmSubtitlePostProcessor(
 
   return {
     async process(input) {
+      input = { ...input, strictValidation: input.strictValidation ?? true };
       throwIfAborted(input.signal);
       // One overall fail-fast budget for the WHOLE external attempt (all chunks
       // combined), so the external path never consumes more than requestTimeoutMs
@@ -78,7 +79,7 @@ export function createExternalLlmSubtitlePostProcessor(
           merged.segments.push(...result.segments);
           merged.chapters?.push(...(result.chapters ?? []));
         }
-        return constrainCorrectionToTrack(merged, input.track);
+        return constrainCorrectionToTrack(merged, input.track, input.strictValidation);
       } catch (error) {
         // The attempt's own deadline aborted us (not a user cancel): surface a
         // recoverable timeout so the fallback wrapper runs the local model.
@@ -133,7 +134,7 @@ function createExternalAttemptSignal(
 
 async function processChunk(
   track: SubtitleTrack,
-  input: { context?: Parameters<SubtitlePostProcessor["process"]>[0]["context"] },
+  input: { context?: Parameters<SubtitlePostProcessor["process"]>[0]["context"]; strictValidation?: boolean },
   config: ExternalLlmConfig,
   fetchImpl: typeof fetch,
   signal: AbortSignal,
@@ -144,10 +145,10 @@ async function processChunk(
   );
   const generatedText = await requestCompletion(messages, config, fetchImpl, signal);
   try {
-    return constrainCorrectionToTrack(extractSubtitleCorrectionResult(generatedText), track);
+    return constrainCorrectionToTrack(extractSubtitleCorrectionResult(generatedText, input.strictValidation), track, input.strictValidation);
   } catch (error) {
     if (!isRecoverableJsonOutputError(error)) throw error;
-    const recovered = recoverSubtitleCorrectionResult(generatedText, track);
+    const recovered = input.strictValidation ? null : recoverSubtitleCorrectionResult(generatedText, track);
     if (recovered) return recovered;
     throw error;
   }

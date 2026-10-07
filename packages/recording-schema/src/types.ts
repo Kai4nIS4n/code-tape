@@ -8,8 +8,8 @@
  * dependencies belong in their feature folders.
  */
 
-export const RECORDING_SCHEMA_VERSION = "0.1.0" as const;
-export type RecordingSchemaVersion = typeof RECORDING_SCHEMA_VERSION;
+export const RECORDING_SCHEMA_VERSION = "0.2.0" as const;
+export type RecordingSchemaVersion = "0.1.0" | typeof RECORDING_SCHEMA_VERSION;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Meta / Manifest / Media / Indexes
@@ -17,6 +17,7 @@ export type RecordingSchemaVersion = typeof RECORDING_SCHEMA_VERSION;
 
 export type RecordingLanguage = "javascript" | "typescript" | "python" | "html" | "css";
 export type RecordingScriptLanguage = "javascript" | "typescript";
+export type RecordingDocumentId = `source:${RecordingLanguage}`;
 export type RecordingTheme = "light" | "dark";
 export type EditorCursor = { lineNumber: number; column: number } | null;
 export type EditorSelection = {
@@ -55,6 +56,9 @@ export type RecordingMeta = {
   initialFontSize: number;
   initialTheme: RecordingTheme;
   mediaCapability: MediaCapability;
+  recordingPerspective?: "candidate";
+  participants?: Array<{ id: string; displayName: string; role: "candidate" | "interviewer" }>;
+  documents?: RecordingDocumentId[];
 };
 
 export type RecordingMedia = {
@@ -154,6 +158,11 @@ export type ResumeBaselinePayload = { snapshot: ReplayStableState; reason: "paus
 
 export type ContentChangePayload = {
   fileId: "main";
+  documentId?: RecordingDocumentId;
+  /** Only the 0.1.0 adapter sets this to preserve implicit view switches. */
+  legacyActivatesDocument?: boolean;
+  actorIds?: string[];
+  origin?: "local" | "remote" | "reconnect" | "unknown";
   version: number;
   code: string;
   contentHash: string;
@@ -166,11 +175,12 @@ export type ContentChangePayload = {
 export type LanguageChangePayload = { from: RecordingLanguage; to: RecordingLanguage };
 
 export type SelectionChangePayload = {
+  documentId?: RecordingDocumentId;
   cursor: EditorCursor;
   selection: EditorSelection;
 };
 
-export type EditorScrollPayload = { scrollTop: number; scrollLeft: number };
+export type EditorScrollPayload = { documentId?: RecordingDocumentId; scrollTop: number; scrollLeft: number };
 
 // — Pointer / shortcut —
 
@@ -196,6 +206,7 @@ export type RunStartPayload = {
   language: "javascript" | "typescript" | "html" | "css";
   runtime: "iframe";
   runId: string;
+  inputDocumentsHash?: string;
 };
 
 export type RunOutputPayload = {
@@ -258,6 +269,7 @@ export type ReplayStableState = {
     language: RecordingLanguage;
     activeScriptLanguage?: RecordingScriptLanguage;
     documents?: RecordingEditorDocuments;
+    activeDocumentId?: RecordingDocumentId;
     cursor: EditorCursor;
     selection: EditorSelection;
     scrollTop: number;
@@ -276,6 +288,8 @@ export type ReplayStableState = {
     cameraPosition: { x: number; y: number };
   };
   runtime: {
+    activeRunId?: string;
+    inputDocumentsHash?: string;
     status: "idle" | "running" | "success" | "error";
     stdout: string[];
     stderr: string[];

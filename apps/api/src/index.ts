@@ -34,3 +34,7 @@ export { createDemoRequestHandler, createDemoRuntime } from "./demo/demoServer.j
 export type * from "./cloud/types.js";
 export type * from "./interview/types.js";
 export type * from "./signaling/signalingMessages.js";
+export { createSecureRuntime, type SecureRuntime, type SecureRuntimeOptions } from "./demo/secureRuntime.js";
+export { createAccountAuthService, type AccountAuthService, type AccountIdentity, type AccountUser } from "./auth/accountAuthService.js";
+export { openAppDatabase, type AppDatabase } from "./persistence/database.js";
+export { createSqliteMetadataRepository } from "./persistence/sqliteMetadataRepository.js";

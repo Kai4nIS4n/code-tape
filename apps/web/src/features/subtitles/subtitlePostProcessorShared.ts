@@ -114,7 +114,7 @@ function buildSubtitlePostProcessorPayload({
       fileName: context?.fileName ?? null,
       code: budgetPromptText(context?.code ?? "", MAX_PROMPT_CODE_CHARS),
       runtimeOutput: budgetPromptText(context?.runtimeOutput ?? "", MAX_PROMPT_RUNTIME_OUTPUT_CHARS),
-      glossary: context?.glossary ?? [],
+      glossary: context?.glossary?.slice(0, 100) ?? [],
     },
     inputSegments: track.segments.map((segment) => ({
       id: segment.id,
@@ -159,7 +159,7 @@ export function isRecoverableJsonOutputError(error: unknown): boolean {
   );
 }
 
-export function extractSubtitleCorrectionResult(text: string): SubtitleCorrectionResult {
+export function extractSubtitleCorrectionResult(text: string, independentValidation = false): SubtitleCorrectionResult {
   const jsonText = extractJsonObjectText(text);
   let value: unknown;
   try {
@@ -172,19 +172,28 @@ export function extractSubtitleCorrectionResult(text: string): SubtitleCorrectio
   }
   const segments = Array.isArray(value.segments) ? value.segments : null;
   const chapters = Array.isArray(value.chapters) ? value.chapters : null;
-  if (!segments) throw new Error("LLM 输出缺少 segments 数组");
-  if (!chapters) throw new Error("LLM 输出缺少 chapters 数组");
+  if (!segments && !independentValidation) throw new Error("LLM 输出缺少 segments 数组");
+  if (!chapters && !independentValidation) throw new Error("LLM 输出缺少 chapters 数组");
 
   return {
-    segments: segments.map((segment, index) => normalizeSegment(segment, index)),
-    chapters: chapters.map((chapter, index) => normalizeChapter(chapter, index)),
+    segments: (segments ?? [null]).map((segment, index) => {
+      try { return normalizeSegment(segment, index); }
+      catch (error) { if (!independentValidation) throw error; return { id: "__invalid_segment__", text: "" }; }
+    }),
+    chapters: (chapters ?? [null]).map((chapter, index) => {
+      try { return normalizeChapter(chapter, index); }
+      catch (error) { if (!independentValidation) throw error; return { title: "", startMs: Number.NaN }; }
+    }),
   };
 }
 
 export function constrainCorrectionToTrack(
   correction: SubtitleCorrectionResult,
   track: SubtitleTrack,
+  strict = true,
 ): SubtitleCorrectionResult {
+  // Preserve invalid rows so the caller can reject the entire batch.
+  if (strict) return correction;
   return {
     ...correction,
     segments: constrainCorrectionSegments(correction.segments, track),

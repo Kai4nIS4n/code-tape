@@ -11,6 +11,7 @@ import { createDemoRequestHandler, createDemoRuntime } from "../demoServer.js";
 test("demo request handler serves cloud API before static SPA fallback", async () => {
   const webRoot = await makeWebRoot();
   const handler = createDemoRequestHandler({
+    legacyTestMode: true,
     webRoot,
     createRequestId: () => "req-demo-api",
   });
@@ -36,6 +37,7 @@ test("demo request handler serves cloud API before static SPA fallback", async (
 test("demo request handler validates completed uploads for immediate cloud playback", async () => {
   const webRoot = await makeWebRoot();
   const handler = createDemoRequestHandler({
+    legacyTestMode: true,
     webRoot,
     createRequestId: () => "req-demo-upload",
   });
@@ -105,6 +107,7 @@ test("demo request handler validates completed uploads for immediate cloud playb
 
 test("demo runtime server exposes the same-origin cloud API over HTTP", async () => {
   const runtime = createDemoRuntime({
+    legacyTestMode: true,
     webRoot: await makeWebRoot(),
     createRequestId: () => "req-demo-server",
   });

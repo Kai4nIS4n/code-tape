@@ -23,10 +23,10 @@ export function buildReplayIndex(pkg: RecordingPackageV1): ReplayIndex {
     if (list) list.push(event);
     else eventsByType.set(event.type, [event]);
   }
-  const snapshotsByTime = pkg.snapshots.slice().sort((a, b) => a.timestampMs - b.timestampMs);
+  const snapshotsByTime = pkg.snapshots.slice().sort((a, b) => a.timestampMs - b.timestampMs || a.eventSeq - b.eventSeq);
   const stableEventsByTime = eventsBySeq
     .filter((event) => STABLE_EVENT_TYPES.has(event.type))
-    .sort((a, b) => a.timestampMs - b.timestampMs);
+    .sort((a, b) => a.timestampMs - b.timestampMs || a.seq - b.seq);
   const markersByTime = (eventsByType.get("chapter-marker") ?? []).slice();
   const activityDensity = buildReplayActivityDensity(pkg);
   return {
@@ -37,6 +37,18 @@ export function buildReplayIndex(pkg: RecordingPackageV1): ReplayIndex {
     markersByTime,
     activityDensity,
   };
+}
+
+/** Recording timestamps are monotonic by sequence; snapshots cover seq inclusively. */
+export function upperBoundEventSeq(events: readonly RecordingEvent[], seq: number): number {
+  let lo = 0;
+  let hi = events.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (events[mid].seq <= seq) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
 }
 
 export function buildReplayActivityDensity(pkg: RecordingPackageV1): ActivityDensityBucket[] {

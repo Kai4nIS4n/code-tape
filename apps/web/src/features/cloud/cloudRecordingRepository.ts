@@ -11,7 +11,7 @@
  * - 查询录制详情与状态（GET /api/recordings/:id）
  * - 查询当前 owner 的 ready 录制列表（GET /api/recordings）
  * - 获取 playback descriptor，重命名，软删除
- * - 管理持久化的 demo owner token
+ * - 使用账号 AuthClient 管理认证，并隔离账号切换中的请求
  *
  * 不包含：
  * - 上传按钮或完整 UI
@@ -22,6 +22,7 @@
 
 import { sha256Blob, type RecordingPackageV1 } from "@code-tape/recording-schema";
 import { canonicalStringify, sha256Hex } from "@code-tape/recording-schema/hash";
+import { authClient, type AuthClient } from "@/features/auth/authClient";
 import type {
   CloudRecordingRepository,
   CloudResult,
@@ -45,17 +46,6 @@ import type {
 // 配置常量
 // ─────────────────────────────────────────────────────────────
 
-/** localStorage 中存储 owner token 的键名 */
-const OWNER_TOKEN_KEY = "code-tape-cloud-owner-token";
-
-/** owner token 随机字符串长度（32 字节 hex = 64 字符） */
-const OWNER_TOKEN_BYTES = 32;
-
-const OWNER_TOKEN_PATTERN = /^[a-f0-9]{64}$/i;
-
-/** access token 到期前的提前刷新余量（毫秒），避免边界请求带过期 token */
-const ACCESS_TOKEN_REFRESH_SKEW_MS = 30_000;
-
 /** 默认 API 基础路径（空串表示同源） */
 const DEFAULT_API_BASE = "";
 
@@ -66,88 +56,23 @@ const DEFAULT_API_BASE = "";
 export type CloudRecordingRepositoryOptions = {
   /** API 基础 URL，默认空串（同源）。测试中可传入 mock 地址 */
   apiBase?: string;
+  auth?: AuthClient;
 };
 
 /**
  * 创建 CloudRecordingRepository 实例
  *
- * owner token 在首次调用 getOwnerToken() 时自动生成并持久化到 localStorage，
- * 该 token 用于标识当前匿名 owner，上传的录制归属于此 owner。
+ * 云端归属由服务器认证账号决定，不再生成匿名设备身份。
  */
 export function createCloudRecordingRepository(
   options: CloudRecordingRepositoryOptions = {},
 ): CloudRecordingRepository {
   const apiBase = options.apiBase ?? DEFAULT_API_BASE;
-  let inMemoryOwnerToken: string | null = null;
-  // 短期 access token 内存缓存；长期 refresh token（设备 token）仅发往 /api/auth/token。
-  let accessToken: { value: string; expiresAt: number } | null = null;
-  let refreshInFlight: Promise<string | null> | null = null;
-
-  const refreshAccessToken = async (): Promise<string | null> => {
-    const refreshToken = repo.getOwnerToken();
-    try {
-      const response = await fetch(`${apiBase}/api/auth/token`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ refreshToken }),
-      });
-      if (!response.ok) return null;
-      const body = (await response.json()) as { accessToken?: unknown; expiresAt?: unknown };
-      if (typeof body.accessToken !== "string" || typeof body.expiresAt !== "number") {
-        return null;
-      }
-      accessToken = { value: body.accessToken, expiresAt: body.expiresAt };
-      return accessToken.value;
-    } catch {
-      return null;
-    }
-  };
-
-  const ensureAccessToken = async (forceRefresh = false): Promise<string | null> => {
-    if (
-      !forceRefresh &&
-      accessToken &&
-      Date.now() < accessToken.expiresAt - ACCESS_TOKEN_REFRESH_SKEW_MS
-    ) {
-      return accessToken.value;
-    }
-    if (forceRefresh) accessToken = null;
-    if (!refreshInFlight) {
-      refreshInFlight = refreshAccessToken().finally(() => {
-        refreshInFlight = null;
-      });
-    }
-    return refreshInFlight;
-  };
-
-  /**
-   * 带 Bearer access token 发起业务请求；token 过期前自动刷新，遇 401 强制刷新重试一次。
-   * 刷新失败时**不**回退到 x-owner-token——refresh token（设备 token）绝不随业务请求裸传，
-   * 仅发往 /api/auth/token。服务端的 x-owner-token 兼容路径只服务旧客户端。
-   */
-  const authorizedFetch = async (
+  const account = options.auth ?? authClient;
+  const authorizedFetch = (
     url: string,
     init: RequestInit & { headers?: Record<string, string> } = {},
-  ): Promise<Response> => {
-    const baseHeaders = init.headers ?? {};
-    const send = (token: string): Promise<Response> =>
-      fetch(url, { ...init, headers: { ...baseHeaders, authorization: `Bearer ${token}` } });
-
-    const token = await ensureAccessToken();
-    if (!token) {
-      // 刷新失败：返回 401 让上层得到结构化 unauthorized 错误，绝不裸传 refresh token。
-      return new Response(
-        JSON.stringify({ error: { code: "unauthorized", message: "failed to obtain access token" } }),
-        { status: 401, headers: { "content-type": "application/json" } },
-      );
-    }
-    const response = await send(token);
-    if (response.status === 401) {
-      const refreshed = await ensureAccessToken(true);
-      if (refreshed) return send(refreshed);
-    }
-    return response;
-  };
+  ): Promise<Response> => account.fetch(url, init);
 
   const repo: CloudRecordingRepository = {
     // ── 创建上传会话 ──────────────────────────────────────
@@ -490,21 +415,9 @@ export function createCloudRecordingRepository(
       };
     },
 
-    // ── owner token 管理 ──────────────────────────────────
+    // 兼容旧接口名称，仅返回账号 ID；不作为认证凭据发送。
     getOwnerToken(): string {
-      // 1. 优先从 localStorage 读取
-      const existing = readOwnerToken();
-      if (existing) {
-        inMemoryOwnerToken = existing;
-        return existing;
-      }
-      // 2. localStorage 不可用时复用实例内缓存的 token
-      if (inMemoryOwnerToken) return inMemoryOwnerToken;
-      // 3. 生成新 token 并同时写入内存和尝试持久化
-      const token = generateOwnerToken();
-      inMemoryOwnerToken = token;
-      persistOwnerToken(token);
-      return token;
+      return account.getSnapshot().user?.id ?? "";
     },
   };
 
@@ -730,60 +643,4 @@ function putBlobWithProgress(
 
     xhr.send(blob);
   });
-}
-
-// ─────────────────────────────────────────────────────────────
-// owner token 持久化
-// ─────────────────────────────────────────────────────────────
-
-function readOwnerToken(): string | null {
-  try {
-    if (typeof localStorage !== "undefined") {
-      const token = localStorage.getItem(OWNER_TOKEN_KEY);
-      if (token && OWNER_TOKEN_PATTERN.test(token)) {
-        return token.toLowerCase();
-      }
-    }
-  } catch {
-    // localStorage 不可用（如无痕模式或 SSR），返回 null
-  }
-  return null;
-}
-
-function persistOwnerToken(token: string): void {
-  try {
-    if (typeof localStorage !== "undefined") {
-      localStorage.setItem(OWNER_TOKEN_KEY, token);
-    }
-  } catch {
-    // localStorage 不可用时静默忽略，token 仅在内存中有效
-  }
-}
-
-/**
- * 生成安全的随机 owner token（hex 编码）。
- * 在浏览器和 jsdom 环境中使用 crypto.getRandomValues。
- */
-function generateOwnerToken(): string {
-  if (typeof globalThis.crypto !== "undefined" && globalThis.crypto.getRandomValues) {
-    const bytes = new Uint8Array(OWNER_TOKEN_BYTES);
-    globalThis.crypto.getRandomValues(bytes);
-    return toHex(bytes);
-  }
-  // 回退：伪随机（仅在不支持 crypto 的环境中触发）
-  let hex = "";
-  for (let i = 0; i < OWNER_TOKEN_BYTES; i++) {
-    hex += Math.floor(Math.random() * 256)
-      .toString(16)
-      .padStart(2, "0");
-  }
-  return hex;
-}
-
-function toHex(bytes: Uint8Array): string {
-  let out = "";
-  for (let i = 0; i < bytes.length; i++) {
-    out += bytes[i].toString(16).padStart(2, "0");
-  }
-  return out;
 }

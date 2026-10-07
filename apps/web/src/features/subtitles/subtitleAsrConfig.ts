@@ -13,12 +13,17 @@ export const SUBTITLE_ASR_CONFIG_STORAGE_KEY = "code-tape:subtitle-asr";
 const VALID_PROVIDERS: ReadonlySet<string> = new Set<ExternalAsrProvider>(["openai-compatible"]);
 
 export function loadExternalAsrConfig(
-  storage: Pick<Storage, "getItem"> | undefined = safeStorage(),
+  storage?: Pick<Storage, "getItem">,
 ): ExternalAsrConfig | null {
-  if (!storage) return null;
+  const selected = storage ?? safeStorage("session");
+  if (!selected) return null;
   let raw: string | null;
   try {
-    raw = storage.getItem(SUBTITLE_ASR_CONFIG_STORAGE_KEY);
+    raw = selected.getItem(SUBTITLE_ASR_CONFIG_STORAGE_KEY);
+    if (!raw && !storage) {
+      const persisted = safeStorage("local")?.getItem(SUBTITLE_ASR_CONFIG_STORAGE_KEY);
+      if (persisted && JSON.parse(persisted).rememberKey === true) raw = persisted;
+    }
   } catch {
     return null;
   }
@@ -32,22 +37,29 @@ export function loadExternalAsrConfig(
 
 export function saveExternalAsrConfig(
   config: ExternalAsrConfig,
-  storage: Pick<Storage, "setItem"> | undefined = safeStorage(),
+  storage?: Pick<Storage, "setItem">,
+  options: { rememberKey?: boolean } = {},
 ): void {
-  if (!storage) return;
+  const selected = storage ?? safeStorage("session");
+  if (!selected) return;
   try {
-    storage.setItem(SUBTITLE_ASR_CONFIG_STORAGE_KEY, JSON.stringify(normalizeConfigStrict(config)));
+    const value = normalizeConfigStrict(config);
+    selected.setItem(SUBTITLE_ASR_CONFIG_STORAGE_KEY, JSON.stringify(value));
+    if (!storage) {
+      if (options.rememberKey) safeStorage("local")?.setItem(SUBTITLE_ASR_CONFIG_STORAGE_KEY, JSON.stringify({ ...value, rememberKey: true }));
+      else safeStorage("local")?.removeItem(SUBTITLE_ASR_CONFIG_STORAGE_KEY);
+    }
   } catch {
     // localStorage can be unavailable; the app simply keeps using local ASR.
   }
 }
 
 export function clearExternalAsrConfig(
-  storage: Pick<Storage, "removeItem"> | undefined = safeStorage(),
+  storage?: Pick<Storage, "removeItem">,
 ): void {
-  if (!storage) return;
   try {
-    storage.removeItem(SUBTITLE_ASR_CONFIG_STORAGE_KEY);
+    if (storage) storage.removeItem(SUBTITLE_ASR_CONFIG_STORAGE_KEY);
+    else { safeStorage("session")?.removeItem(SUBTITLE_ASR_CONFIG_STORAGE_KEY); safeStorage("local")?.removeItem(SUBTITLE_ASR_CONFIG_STORAGE_KEY); }
   } catch {
     // ignore
   }
@@ -89,9 +101,9 @@ function normalizeConfigStrict(config: ExternalAsrConfig): ExternalAsrConfig {
   };
 }
 
-function safeStorage(): Storage | undefined {
+function safeStorage(kind: "local" | "session"): Storage | undefined {
   try {
-    return typeof globalThis !== "undefined" ? globalThis.localStorage : undefined;
+    return typeof globalThis !== "undefined" ? kind === "session" ? globalThis.sessionStorage : globalThis.localStorage : undefined;
   } catch {
     return undefined;
   }
