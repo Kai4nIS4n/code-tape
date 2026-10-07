@@ -2,6 +2,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodeEditorHandle } from "../CodeEditor";
+import type { CollaborationSession } from "@/features/collaboration/collaborationSession";
 
 type MockKeyboardEvent = {
   browserEvent: { key: string; code: string; isComposing: boolean; repeat: boolean };
@@ -33,6 +34,8 @@ const monacoMock = vi.hoisted(() => {
     getLanguageId() {
       return this.language;
     }
+    getLineCount() { return this.value.split("\n").length; }
+    getLineMaxColumn(line: number) { return (this.value.split("\n")[line - 1]?.length ?? 0) + 1; }
 
     getFullModelRange() {
       const lines = this.value.split("\n");
@@ -56,9 +59,19 @@ const monacoMock = vi.hoisted(() => {
 
   class MockEditor {
     disposed = false;
+    readonly readOnlyAtCreation: boolean;
     commands: Array<{ keybinding: number; handler: () => void }> = [];
     keyboardListeners: Array<(event: MockKeyboardEvent) => void> = [];
     contentChangeListeners: Array<() => void> = [];
+    selectionListeners: Array<() => void> = [];
+    onDidChangeCursorSelection = vi.fn((listener: () => void) => {
+      this.selectionListeners.push(listener);
+      return { dispose: () => { this.selectionListeners = this.selectionListeners.filter((current) => current !== listener); } };
+    });
+    saveViewState = vi.fn(() => null);
+    restoreViewState = vi.fn();
+    setModel = vi.fn((model: MockModel) => { this.options.model = model; });
+    revealRangeInCenter = vi.fn();
     updateOptions = vi.fn((nextOptions: Record<string, unknown>) => {
       Object.assign(this.options, nextOptions);
     });
@@ -112,7 +125,7 @@ const monacoMock = vi.hoisted(() => {
     constructor(
       public host: HTMLElement,
       public options: Record<string, unknown> & { model: MockModel },
-    ) {}
+    ) { this.readOnlyAtCreation = Boolean(options.readOnly); }
 
     getValue() {
       return this.options.model.getValue();
@@ -230,6 +243,17 @@ vi.mock("prettier/standalone", () => ({
 vi.mock("prettier/plugins/babel", () => ({}));
 vi.mock("prettier/plugins/estree", () => ({}));
 vi.mock("prettier/plugins/typescript", () => ({}));
+vi.mock("y-monaco", () => ({
+  MonacoBinding: class {
+    private readonly update: () => void;
+    constructor(private readonly text: { toString(): string; observe(listener: () => void): void; unobserve(listener: () => void): void }, model: { setValue(value: string): void }, editors: Set<{ onDidChangeCursorSelection(listener: () => void): unknown }>) {
+      this.update = () => model.setValue(text.toString());
+      text.observe(this.update); this.update();
+      editors.forEach((editor) => editor.onDidChangeCursorSelection(() => {}));
+    }
+    destroy() { this.text.unobserve(this.update); }
+  },
+}));
 
 describe("CodeEditor", () => {
   beforeEach(() => {
@@ -304,6 +328,48 @@ describe("CodeEditor", () => {
     );
     expect(ref.current?.getEditor()).toBe(monacoMock.editors[0]);
     expect(onMount).toHaveBeenCalledWith(monacoMock.editors[0]);
+  });
+
+  it("keeps five bound collaborative models stable and ignores observation snapshots", async () => {
+    const { CodeEditor } = await import("../CodeEditor");
+    const Y = await import("yjs"); const { Awareness } = await import("y-protocols/awareness");
+    const doc = new Y.Doc(); const awareness = new Awareness(doc);
+    doc.getText("source:javascript").insert(0, "shared JS");
+    doc.getText("source:html").insert(0, "shared HTML");
+    const session = { getText: (language: string) => doc.getText(`source:${language}`), awareness } as unknown as CollaborationSession;
+    const props = { collaboration: session, language: "javascript" as const, initialValue: "", value: "stale observation", fontSize: 14, theme: "dark" as const };
+    const view = render(<CodeEditor {...props} />);
+    await waitFor(() => expect(monacoMock.editor.createModel).toHaveBeenCalledTimes(6));
+    const editor = monacoMock.editors[0];
+    expect(editor.getValue()).toBe("shared JS");
+    expect(editor.readOnlyAtCreation).toBe(true);
+    expect(editor.options.readOnly).toBe(false);
+    expect(view.container.querySelector("[data-code-editor]")).toHaveAttribute("data-editor-ready", "true");
+    const firstModel = editor.getModel();
+    view.rerender(<CodeEditor {...props} language="html" value="another stale snapshot" />);
+    await waitFor(() => expect(editor.getValue()).toBe("shared HTML"));
+    act(() => doc.getText("source:javascript").insert(9, " remote"));
+    view.rerender(<CodeEditor {...props} />);
+    await waitFor(() => expect(editor.getValue()).toBe("shared JS remote"));
+    expect(editor.getModel()).toBe(firstModel);
+    expect(monacoMock.editor.createModel).toHaveBeenCalledTimes(6);
+    expect(editor.setValue).not.toHaveBeenCalled();
+    expect(editor.selectionListeners).toHaveLength(5);
+    view.unmount();
+    expect(editor.selectionListeners).toHaveLength(0);
+    awareness.destroy(); doc.destroy();
+  });
+
+  it("reveals subtitle code without changing the recorded selection and clears old decorations", async () => {
+    const { CodeEditor } = await import("../CodeEditor");
+    const range = { startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: 5 };
+    const view = render(<CodeEditor language="javascript" initialValue={"first\nsecond"} fontSize={14} theme="dark" readOnly revealRange={{ requestId: 1, range }} />);
+    await waitFor(() => expect(monacoMock.editors[0]?.revealRangeInCenter).toHaveBeenCalledWith(range));
+    const editor = monacoMock.editors[0];
+    expect(editor.setSelection).not.toHaveBeenCalled(); expect(editor.setPosition).not.toHaveBeenCalled();
+    view.rerender(<CodeEditor language="javascript" initialValue={"first\nsecond"} fontSize={14} theme="dark" readOnly revealRange={null} />);
+    expect(editor.deltaDecorations).toHaveBeenLastCalledWith(["decoration-1"], []);
+    view.unmount();
   });
 
   it("notifies when Monaco model content changes", async () => {

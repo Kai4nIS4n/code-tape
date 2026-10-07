@@ -42,6 +42,7 @@ export type InterviewPeerConnection = {
   oniceconnectionstatechange: (() => void) | null;
   onsignalingstatechange: (() => void) | null;
   addTrack(track: MediaStreamTrack, stream: MediaStream): void;
+  addTransceiver?(trackOrKind: string | MediaStreamTrack, init?: RTCRtpTransceiverInit): RTCRtpTransceiver;
   createDataChannel(label: string, dataChannelDict?: RTCDataChannelInit): InterviewEventsDataChannel;
   createOffer(options?: RTCOfferOptions): Promise<RTCSessionDescriptionInit>;
   createAnswer(options?: RTCAnswerOptions): Promise<RTCSessionDescriptionInit>;
@@ -209,6 +210,10 @@ export function createInterviewMediaSession(
       );
     },
     async createOffer(offerOptions) {
+      if (!localStream && !peer.localDescription) {
+        peer.addTransceiver?.("audio", { direction: "recvonly" });
+        peer.addTransceiver?.("video", { direction: "recvonly" });
+      }
       const offer = await peer.createOffer(offerOptions);
       await peer.setLocalDescription(offer);
       notify();

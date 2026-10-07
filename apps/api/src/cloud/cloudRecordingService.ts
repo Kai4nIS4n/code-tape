@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { RECORDING_SCHEMA_VERSION, type RecordingLanguage } from "@code-tape/recording-schema";
+import { RECORDING_SCHEMA_VERSION, RECORDING_LANGUAGES } from "@code-tape/recording-schema";
 import { sha256Hex } from "@code-tape/recording-schema/hash";
 import { parseIsoUtcInstantMs } from "./isoDate.js";
 import type { MetadataRepository } from "./metadataRepository.js";
@@ -38,11 +38,6 @@ const REQUIRED_ASSETS: RecordingAssetKind[] = ["manifest", "meta", "events", "sn
 const PLAYBACK_DESCRIPTOR_TTL_MS = 5 * 60 * 1000;
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const RECORDING_ASSET_KIND_SET = new Set<string>(RECORDING_ASSET_KINDS);
-const RECORDING_LANGUAGES = [
-  "javascript",
-  "typescript",
-  "python",
-] as const satisfies readonly RecordingLanguage[];
 const RECORDING_LANGUAGE_SET = new Set<string>(RECORDING_LANGUAGES);
 const MAX_UPLOAD_SCALAR_LENGTH = 128;
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/u;
@@ -586,6 +581,8 @@ async function buildPlaybackDescriptor(input: {
       title: input.recording.title,
       durationMs: input.recording.durationMs,
       schemaVersion: input.recording.schemaVersion,
+      hasAudio: input.recording.hasAudio,
+      hasCamera: input.recording.hasCamera,
       manifestUrl: getUrl("manifest")!,
       metaUrl: getUrl("meta")!,
       eventsUrl: getUrl("events")!,
@@ -690,7 +687,7 @@ async function resolveExistingUploadSession(input: {
 }
 
 function validateCreateUploadSessionInput(input: CreateUploadSessionRequest): CloudApiError | null {
-  if (input.schemaVersion !== RECORDING_SCHEMA_VERSION) {
+  if (input.schemaVersion !== RECORDING_SCHEMA_VERSION && input.schemaVersion !== "0.1.0") {
     return {
       code: "unsupported-schema",
       message: `unsupported schemaVersion: ${input.schemaVersion}`,

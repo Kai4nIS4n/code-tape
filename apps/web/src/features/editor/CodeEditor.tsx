@@ -2,6 +2,8 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import type { MutableRefObject } from "react";
 import type * as Monaco from "monaco-editor/esm/vs/editor/editor.api";
 import type { RecordingLanguage, ReplayStableState } from "@/shared/recording-schema";
+import { RECORDING_LANGUAGES } from "@/shared/recording-schema";
+import type { CollaborationSession } from "@/features/collaboration/collaborationSession";
 
 export type CodeEditorHandle = {
   /** Lazy accessor — null until the editor has mounted. */
@@ -18,6 +20,8 @@ export type CodeEditorProps = {
   fontSize: number;
   theme: "light" | "dark";
   readOnly?: boolean;
+  collaboration?: CollaborationSession | null;
+  revealRange?: { requestId: number; range: NonNullable<ReplayStableState["editor"]["selection"]> } | null;
   cursor?: ReplayStableState["editor"]["cursor"];
   selection?: ReplayStableState["editor"]["selection"];
   scrollTop?: number;
@@ -157,6 +161,8 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
     fontSize,
     theme,
     readOnly = false,
+    collaboration,
+    revealRange,
     cursor,
     selection,
     scrollTop,
@@ -192,6 +198,16 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
   const onCommandRef = useRef(onCommand);
   const onBeforeFormatApplyRef = useRef(onBeforeFormatApply);
   const [loadError, setLoadError] = useState<unknown>(null);
+  const [editorReady, setEditorReady] = useState(false);
+  const collaborationRef = useRef(collaboration);
+  const boundSessionRef = useRef<CollaborationSession | null>(null);
+  const collaborativeModelsRef = useRef<Map<RecordingLanguage, Monaco.editor.ITextModel>>(new Map());
+  const collaborativeViewStatesRef = useRef<Map<RecordingLanguage, Monaco.editor.ICodeEditorViewState | null>>(new Map());
+  const bindingsRef = useRef<Map<RecordingLanguage, { destroy(): void }>>(new Map());
+  const undoRef = useRef<{ undo(): void; redo(): void; destroy(): void; addTrackedOrigin(origin: unknown): void } | null>(null);
+  const collaborativeLanguageRef = useRef<RecordingLanguage>(language);
+  const [bindingFactory, setBindingFactory] = useState<{ bind: (language: RecordingLanguage) => void } | null>(null);
+  collaborationRef.current = collaboration;
   const minHeightClass = minHeight === "compact" ? "min-h-[288px]" : "min-h-[320px]";
 
   latestPropsRef.current = {
@@ -217,7 +233,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
       setModelLanguage: (nextLanguage) => {
         const monaco = monacoRef.current;
         const model = modelRef.current;
-        if (!monaco || !model) return;
+        if (!monaco || !model || collaborationRef.current) return;
         monaco.editor.setModelLanguage(model, nextLanguage);
       },
     }),
@@ -240,7 +256,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
           automaticLayout: true,
           fontSize: currentProps.fontSize,
           minimap: { enabled: false },
-          readOnly: currentProps.readOnly,
+          readOnly: currentProps.readOnly || Boolean(collaborationRef.current),
           scrollBeyondLastLine: false,
           tabSize: 2,
           theme: monacoTheme(currentProps.theme),
@@ -255,13 +271,14 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
         registerEditorCommands(
           monaco,
           editor,
-          () => latestPropsRef.current.readOnly,
-          (command) => onCommandRef.current?.(command),
+          () => latestPropsRef.current.readOnly || Boolean(collaborationRef.current && boundSessionRef.current !== collaborationRef.current),
+          (command) => { if (!collaborationRef.current || boundSessionRef.current === collaborationRef.current) onCommandRef.current?.(command); },
           () => onBeforeFormatApplyRef.current?.(),
         );
-        applyControlledEditorState(editor, currentProps);
+        applyControlledEditorState(editor, collaborationRef.current ? { ...currentProps, value: undefined } : currentProps);
         pulseCollapsedSelection(editor, currentProps.selection, collapsedSelectionDecorationIdsRef, collapsedSelectionTimerRef);
         onMountRef.current?.(editor);
+        setEditorReady(true);
         editor.onDidDispose?.(() => contentChangeDisposable.dispose());
       })
       .catch((error: unknown) => {
@@ -286,18 +303,95 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
 
   useEffect(() => {
     const monaco = monacoRef.current;
+    const editor = editorRef.current;
+    if (!collaboration || !editorReady || !monaco || !editor) return;
+    let cancelled = false;
+    const temporaryModel = modelRef.current;
+    const models = collaborativeModelsRef.current;
+    const bindings = bindingsRef.current;
+    const viewStates = collaborativeViewStatesRef.current;
+    const selectionListeners: Monaco.IDisposable[] = [];
+    // y-monaco does not currently dispose editor selection subscriptions from
+    // destroy(). Track those subscriptions explicitly for route/session cleanup.
+    const bindingEditor = new Proxy(editor, {
+      get(target, property) {
+        if (property === "onDidChangeCursorSelection") return (listener: Parameters<typeof editor.onDidChangeCursorSelection>[0]) => {
+          const disposable = target.onDidChangeCursorSelection(listener);
+          selectionListeners.push(disposable);
+          return disposable;
+        };
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const keyboard = editor.onKeyDown((event) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      const key = event.browserEvent.key.toLowerCase();
+      if (key === "z" || key === "y") {
+        consumeShortcut(event);
+        if (latestPropsRef.current.readOnly) return;
+        if (key === "y" || event.shiftKey) undoRef.current?.redo();
+        else undoRef.current?.undo();
+      }
+    });
+    void Promise.all([import("y-monaco"), import("yjs")]).then(([{ MonacoBinding }, Y]) => {
+      if (cancelled) return;
+      for (const nextLanguage of RECORDING_LANGUAGES) {
+        models.set(nextLanguage, monaco.editor.createModel(collaboration.getText(nextLanguage).toString(), nextLanguage));
+      }
+      undoRef.current = new Y.UndoManager(RECORDING_LANGUAGES.map((nextLanguage) => collaboration.getText(nextLanguage)), { trackedOrigins: new Set() });
+      for (const nextLanguage of RECORDING_LANGUAGES) {
+        const binding = new MonacoBinding(collaboration.getText(nextLanguage), models.get(nextLanguage)!, new Set([bindingEditor]), collaboration.awareness);
+        bindings.set(nextLanguage, binding);
+        undoRef.current.addTrackedOrigin(binding);
+      }
+      const bind = (nextLanguage: RecordingLanguage) => {
+        const previous = collaborativeLanguageRef.current;
+        viewStates.set(previous, editor.saveViewState());
+        const model = models.get(nextLanguage)!;
+        modelRef.current = model;
+        editor.setModel(model);
+        collaborativeLanguageRef.current = nextLanguage;
+        editor.restoreViewState(viewStates.get(nextLanguage) ?? null);
+        collaboration.awareness.setLocalStateField("documentId", `source:${nextLanguage}`);
+      };
+      bind(latestPropsRef.current.language);
+      temporaryModel?.dispose();
+      boundSessionRef.current = collaboration;
+      setBindingFactory({ bind });
+    }).catch((error: unknown) => setLoadError(error));
+    return () => {
+      cancelled = true;
+      if (boundSessionRef.current === collaboration) boundSessionRef.current = null;
+      keyboard.dispose();
+      selectionListeners.forEach((listener) => listener.dispose());
+      for (const binding of bindings.values()) binding.destroy();
+      bindings.clear();
+      undoRef.current?.destroy(); undoRef.current = null;
+      for (const model of models.values()) model.dispose();
+      models.clear(); viewStates.clear();
+      setBindingFactory(null);
+    };
+  }, [collaboration, editorReady]);
+
+  useEffect(() => {
+    if (bindingFactory && collaborativeLanguageRef.current !== language) bindingFactory.bind(language);
+  }, [language, bindingFactory]);
+
+  useEffect(() => {
+    const monaco = monacoRef.current;
     const model = modelRef.current;
-    if (!monaco || !model) return;
+    if (!monaco || !model || collaboration) return;
     monaco.editor.setModelLanguage(model, language);
-  }, [language]);
+  }, [language, collaboration]);
 
   useEffect(() => {
     editorRef.current?.updateOptions({ fontSize });
   }, [fontSize]);
 
   useEffect(() => {
-    editorRef.current?.updateOptions({ readOnly });
-  }, [readOnly]);
+    editorRef.current?.updateOptions({ readOnly: readOnly || Boolean(collaboration && boundSessionRef.current !== collaboration) });
+  }, [readOnly, collaboration, bindingFactory]);
 
   useEffect(() => {
     monacoRef.current?.editor.setTheme(monacoTheme(theme));
@@ -305,9 +399,9 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
 
   useEffect(() => {
     const editor = editorRef.current;
-    if (!editor || value === undefined || editor.getValue() === value) return;
+    if (!editor || collaboration || value === undefined || editor.getValue() === value) return;
     editor.setValue(value);
-  }, [value]);
+  }, [value, collaboration]);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -332,9 +426,26 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
     editor.setScrollLeft(scrollLeft);
   }, [scrollLeft]);
 
+  useEffect(() => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    if (!editor || !model || !revealRange) return;
+    const range = revealRange.range;
+    if (range.startLineNumber < 1 || range.endLineNumber > model.getLineCount() || range.startLineNumber > range.endLineNumber
+      || range.startColumn < 1 || range.endColumn < 1 || range.startColumn > model.getLineMaxColumn(range.startLineNumber)
+      || range.endColumn > model.getLineMaxColumn(range.endLineNumber)) return;
+    editor.revealRangeInCenter(range);
+    let decorations = editor.deltaDecorations([], [{ range, options: { className: "code-tape-subtitle-code-highlight", isWholeLine: true } }]);
+    const clear = () => { if (editorRef.current === editor && decorations.length) { editor.deltaDecorations(decorations, []); decorations = []; } };
+    const timer = setTimeout(clear, 1600);
+    return () => { clearTimeout(timer); clear(); };
+  }, [revealRange, value, editorReady]);
+
   return (
-    <div className={`relative h-full ${minHeightClass} w-full bg-surface`} data-code-editor>
+    <div className={`relative h-full ${minHeightClass} w-full bg-surface`} data-code-editor data-editor-ready={editorReady && (!collaboration || boundSessionRef.current === collaboration)}>
+      {collaboration ? <style>{".yRemoteSelection { background: rgba(102, 187, 255, .24); } .yRemoteSelectionHead { position:absolute; border-left:2px solid #66bbff; height:100%; }"}</style> : null}
       <div ref={hostRef} aria-label="Code editor" className={`h-full ${minHeightClass} w-full`} />
+      {collaboration && boundSessionRef.current !== collaboration && !loadError ? <div role="status" className="absolute inset-0 flex items-center justify-center bg-surface/80 text-sm text-muted">正在连接协同编辑器…</div> : null}
       {loadError ? (
         <div className="absolute inset-0 flex items-center justify-center bg-surface/90 p-4" role="alert">
           <div className="max-w-sm rounded-md border border-border bg-surface-raised px-4 py-3 shadow-elevation-2">

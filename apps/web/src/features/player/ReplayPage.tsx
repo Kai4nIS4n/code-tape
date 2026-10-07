@@ -10,19 +10,33 @@ import {
   type SetStateAction,
 } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { Camera, Captions, CircleAlert, Keyboard, MousePointer2, Share2, TerminalSquare } from "lucide-react";
+import {
+  Camera,
+  Captions,
+  CircleAlert,
+  Keyboard,
+  MousePointer2,
+  Share2,
+  TerminalSquare,
+} from "lucide-react";
 import { createReplayScheduler, defaultTickStrategy } from "./replayScheduler";
 import { buildReplayActivityDensity } from "./replayIndex";
 import { createTimelineClock } from "./timelineClock";
 import { ReplayControls } from "./ReplayControls";
-import { createMediaClockAdapter } from "./mediaClockAdapter";
-import { CodeEditor } from "@/features/editor/CodeEditor";
+import { EventTimeline } from "./EventTimeline";
+import { createReplayContextResolver } from "./replayContextResolver";
+import { createMediaClockAdapter, type ReplayMediaClockAdapter } from "./mediaClockAdapter";
+import { CodeEditor, type CodeEditorHandle } from "@/features/editor/CodeEditor";
+import { featureFlags } from "@/shared/featureFlags";
 import { PreviewPane } from "@/features/runtime-preview/PreviewPane";
 import { RuntimeOutputPanel } from "@/features/runtime-preview/RuntimeOutputPanel";
 import { createIframeRuntime } from "@/features/runtime-preview/iframeRuntime";
 import { createRecordingStore } from "@/features/library/recordingStore";
 import { createCloudRecordingRepository } from "@/features/cloud/cloudRecordingRepository";
 import { SubtitlePanel } from "@/features/subtitles";
+import type { SubtitleCodeAnchor, SubtitleSegment } from "@/features/subtitles/types";
+import { anchorFromState, isValidCodeRange } from "@/features/subtitles/subtitleCodeAnchors";
+import { sha256Hex } from "@/shared/util/hash";
 import { ResizableWorkspace, Toggle } from "@/shared/ui";
 import type {
   PackageWarning,
@@ -150,37 +164,60 @@ export function ReplayPage({ source = "local" }: ReplayPageProps) {
   const [pkg, setPkg] = useState<RecordingPackageV1 | null>(null);
   const [mediaBlob, setMediaBlob] = useState<Blob | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [editorReady, setEditorReady] = useState(false);
   const [eventOnlyNotice, setEventOnlyNotice] = useState(false);
   const [shareBusy, setShareBusy] = useState(false);
-  const [shareFeedback, setShareFeedback] = useState<{ tone: "success" | "error"; message: string } | null>(null);
+  const [shareFeedback, setShareFeedback] = useState<{
+    tone: "success" | "error";
+    message: string;
+  } | null>(null);
   const [volume, setVolume] = useState(100);
   const [muted, setMuted] = useState(false);
   const [displayOptions, setDisplayOptions] =
     useState<ReplayDisplayOptions>(DEFAULT_DISPLAY_OPTIONS);
   const recordedMediaVideoRef = useRef<HTMLVideoElement | null>(null);
+  const replayEditorRef = useRef<CodeEditorHandle | null>(null);
+  const mediaAdapterCacheRef = useRef<{
+    media: RecordedMedia;
+    adapter: ReplayMediaClockAdapter;
+  } | null>(null);
+  const packageGenerationRef = useRef(0);
+  const seekGenerationRef = useRef(0);
+  const schedulerStateRef = useRef(schedulerState);
+  schedulerStateRef.current = schedulerState;
+  const [revealRange, setRevealRange] = useState<{
+    requestId: number;
+    range: NonNullable<SubtitleCodeAnchor["range"]>;
+  } | null>(null);
+  const revealedCodeRef = useRef<{ code: string; documentId: string } | null>(null);
   const pointerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const shortcutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentMedia = pkg?.media ?? null;
-  const activityDensity = useMemo(
-    () => (pkg ? buildReplayActivityDensity(pkg) : []),
+  const activityDensity = useMemo(() => (pkg ? buildReplayActivityDensity(pkg) : []), [pkg]);
+  const historicalContext = useMemo(
+    () => (pkg ? createReplayContextResolver(pkg, DEFAULT_SUBTITLE_GLOSSARY) : null),
     [pkg],
   );
   const createRecordedMediaAdapter = useCallback((media: RecordedMedia) => {
+    if (mediaAdapterCacheRef.current?.media === media) return mediaAdapterCacheRef.current.adapter;
+    mediaAdapterCacheRef.current?.adapter.cancelPendingSeek?.();
     const segment = recordedMediaSegment(media);
-    return createMediaClockAdapter({
+    const adapter = createMediaClockAdapter({
       segments: segment ? [segment] : [],
       currentTimeProvider: () => recordedMediaVideoRef.current?.currentTime ?? null,
       metadataReadyProvider: () => isMediaMetadataReady(recordedMediaVideoRef.current),
       statusProvider: () => readRecordedMediaStatus(recordedMediaVideoRef.current),
-      seekHandler: (_segment, mediaTimeMs) => {
+      seekHandler: (_segment, mediaTimeMs, signal) => {
         const video = recordedMediaVideoRef.current;
         if (!video) return;
-        video.currentTime = mediaTimeMs / 1000;
+        return seekVideoElement(video, mediaTimeMs / 1000, signal);
       },
       rateHandler: (rate) => {
         if (recordedMediaVideoRef.current) recordedMediaVideoRef.current.playbackRate = rate;
       },
     });
+    mediaAdapterCacheRef.current = { media, adapter };
+    return adapter;
   }, []);
   const mediaAdapter = useMemo(() => {
     if (!currentMedia || !mediaBlob) return null;
@@ -195,6 +232,15 @@ export function ReplayPage({ source = "local" }: ReplayPageProps) {
       clock: createTimelineClock(),
       tickStrategy: defaultTickStrategy(),
       onTick: (state, transientEvents = []) => {
+        if (
+          revealedCodeRef.current &&
+          (revealedCodeRef.current.code !== state.editor.code ||
+            revealedCodeRef.current.documentId !==
+              (state.editor.activeDocumentId ?? `source:${state.editor.language}`))
+        ) {
+          revealedCodeRef.current = null;
+          setRevealRange(null);
+        }
         setPosterState(null);
         setStableState(state);
         setOverlayState((current) => overlayStateFromEvents(current, transientEvents));
@@ -205,19 +251,34 @@ export function ReplayPage({ source = "local" }: ReplayPageProps) {
   const syncSchedulerMediaStatus = useCallback(() => {
     scheduler.setMediaAdapter(mediaAdapter);
   }, [mediaAdapter, scheduler]);
-  const playRecordedMedia = useCallback((timelineTimeMs: number) => {
-    const video = recordedMediaVideoRef.current;
-    if (!video) return;
-    const targetMs = mediaAdapter?.timelineToMediaTime(timelineTimeMs) ?? null;
-    if (targetMs === null) {
-      video.pause();
-      return;
-    }
-    void mediaAdapter?.seek(timelineTimeMs);
-    void video.play().catch((err) => {
-      console.warn("[replay-page] recorded media play failed:", err);
-    });
-  }, [mediaAdapter]);
+  const playRecordedMedia = useCallback(
+    (timelineTimeMs: number) => {
+      const video = recordedMediaVideoRef.current;
+      if (!video) return;
+      const packageGeneration = packageGenerationRef.current;
+      const targetMs = mediaAdapter?.timelineToMediaTime(timelineTimeMs) ?? null;
+      if (targetMs === null) {
+        video.pause();
+        return;
+      }
+      void video
+        .play()
+        .then(() => {
+          if (
+            recordedMediaVideoRef.current !== video ||
+            packageGeneration !== packageGenerationRef.current ||
+            ["paused", "seeking", "ended", "loading", "error"].includes(
+              schedulerStateRef.current.status,
+            )
+          )
+            video.pause();
+        })
+        .catch((err) => {
+          console.warn("[replay-page] recorded media play failed:", err);
+        });
+    },
+    [mediaAdapter],
+  );
   const pauseRecordedMedia = useCallback(() => {
     recordedMediaVideoRef.current?.pause();
   }, []);
@@ -231,16 +292,117 @@ export function ReplayPage({ source = "local" }: ReplayPageProps) {
     pauseRecordedMedia();
     scheduler.pause();
   }, [pauseRecordedMedia, scheduler]);
-  const seekReplay = useCallback(async (targetMs: number) => {
-    setPosterState(null);
-    await scheduler.seek(targetMs);
-  }, [scheduler]);
-  const setDisplayOption = useCallback(
-    (key: keyof ReplayDisplayOptions, value: boolean) => {
-      setDisplayOptions((current) => ({ ...current, [key]: value }));
+  const seekReplay = useCallback(
+    async (targetMs: number) => {
+      const packageGeneration = packageGenerationRef.current;
+      const seekGeneration = ++seekGenerationRef.current;
+      setPosterState(null);
+      setRevealRange(null);
+      revealedCodeRef.current = null;
+      const result = scheduler.seekWithResult
+        ? await scheduler.seekWithResult(targetMs)
+        : await scheduler.seek(targetMs);
+      return (
+        packageGeneration === packageGenerationRef.current &&
+        seekGeneration === seekGenerationRef.current &&
+        (!result || result.status === "applied")
+      );
     },
-    [],
+    [scheduler],
   );
+  const seekCodeAnchor = useCallback(
+    async (anchor: SubtitleCodeAnchor) => {
+      if (!featureFlags.subtitleAnchors) {
+        await seekReplay(anchor.targetMs);
+        return;
+      }
+      const generation = packageGenerationRef.current;
+      const requestId = seekGenerationRef.current + 1;
+      if (!(await seekReplay(anchor.targetMs))) return;
+      const state = scheduler.getStableState();
+      if (
+        (state.editor.activeDocumentId ?? `source:${state.editor.language}`) !==
+          anchor.documentId ||
+        !anchor.range ||
+        !isValidCodeRange(state.editor.code, anchor.range)
+      )
+        return;
+      const contentHash = await sha256Hex(state.editor.code);
+      if (
+        generation !== packageGenerationRef.current ||
+        requestId !== seekGenerationRef.current ||
+        !featureFlags.subtitleAnchors ||
+        contentHash !== anchor.contentHash
+      )
+        return;
+      const latestState = scheduler.getStableState();
+      if (
+        latestState.editor.code !== state.editor.code ||
+        (latestState.editor.activeDocumentId ?? `source:${latestState.editor.language}`) !==
+          anchor.documentId
+      )
+        return;
+      revealedCodeRef.current = { code: state.editor.code, documentId: anchor.documentId };
+      setRevealRange({ requestId, range: anchor.range });
+    },
+    [scheduler, seekReplay],
+  );
+  const createManualAnchor = useCallback(
+    async (segmentId: string) => {
+      if (!featureFlags.subtitleAnchors) return null;
+      pauseReplay();
+      const generation = packageGenerationRef.current;
+      const seekGeneration = seekGenerationRef.current;
+      const state = scheduler.getStableState();
+      const editor = replayEditorRef.current?.getEditor();
+      const selection = editor?.getSelection();
+      const cursor = editor?.getPosition();
+      if (!editor || editor.getModel()?.getValue() !== state.editor.code || !selection || !cursor)
+        return null;
+      const selectedState = {
+        ...state,
+        editor: {
+          ...state.editor,
+          cursor: { lineNumber: cursor.lineNumber, column: cursor.column },
+          selection: {
+            startLineNumber: selection.startLineNumber,
+            startColumn: selection.startColumn,
+            endLineNumber: selection.endLineNumber,
+            endColumn: selection.endColumn,
+          },
+        },
+      };
+      const anchor = await anchorFromState(
+        segmentId,
+        schedulerStateRef.current.timelineTimeMs,
+        schedulerStateRef.current.lastAppliedSeq,
+        selectedState,
+        true,
+      );
+      return generation === packageGenerationRef.current &&
+        seekGeneration === seekGenerationRef.current
+        ? anchor
+        : null;
+    },
+    [pauseReplay, scheduler],
+  );
+  const resolveCodeAnchor = useCallback(
+    async (segment: SubtitleSegment) => {
+      if (!historicalContext) return null;
+      const generation = packageGenerationRef.current;
+      const seekGeneration = seekGenerationRef.current;
+      const { state, eventSeq } = historicalContext.stateAt(segment.startMs);
+      const anchor = await anchorFromState(segment.id, segment.startMs, eventSeq, state);
+      return generation === packageGenerationRef.current &&
+        seekGeneration === seekGenerationRef.current
+        ? anchor
+        : undefined;
+    },
+    [historicalContext],
+  );
+  const setDisplayOption = useCallback((key: keyof ReplayDisplayOptions, value: boolean) => {
+    setDisplayOptions((current) => ({ ...current, [key]: value }));
+  }, []);
   const handleShareCurrentTime = useCallback(async () => {
     if (source !== "cloud" || !id || !cloudRepository) return;
     setShareBusy(true);
@@ -261,15 +423,30 @@ export function ReplayPage({ source = "local" }: ReplayPageProps) {
     }
   }, [cloudRepository, id, schedulerState.timelineTimeMs, source]);
 
-  useEffect(() => scheduler.subscribe(setSchedulerState), [scheduler]);
+  useEffect(
+    () =>
+      scheduler.subscribe((state) => {
+        schedulerStateRef.current = state;
+        setSchedulerState(state);
+      }),
+    [scheduler],
+  );
   useEffect(() => () => scheduler.destroy(), [scheduler]);
   useEffect(() => clearOverlayTimers, [clearOverlayTimers]);
+  useEffect(() => {
+    if (!pkg || !editorReady) return;
+    const frame = requestAnimationFrame(() => performance.mark?.("replay-ready"));
+    return () => cancelAnimationFrame(frame);
+  }, [editorReady, pkg]);
   useEffect(() => {
     scheduler.setMediaAdapter(mediaAdapter);
   }, [mediaAdapter, scheduler]);
 
   useEffect(() => {
     if (!id) return;
+    const generation = ++packageGenerationRef.current;
+    seekGenerationRef.current += 1;
+    scheduler.invalidate?.();
     let cancelled = false;
     setLoadError(null);
     setEventOnlyNotice(false);
@@ -278,11 +455,12 @@ export function ReplayPage({ source = "local" }: ReplayPageProps) {
     setStableState(INITIAL_STABLE_STATE);
     setPosterState(null);
     setOverlayState(EMPTY_OVERLAY_STATE);
+    setRevealRange(null);
     clearOverlayTimers();
     recordedMediaVideoRef.current?.pause();
     (async () => {
       const result = await packageLoader.load(id);
-      if (cancelled) return;
+      if (cancelled || generation !== packageGenerationRef.current) return;
       if (!result.ok) {
         setLoadError(
           `${result.error.code}: ${"message" in result.error ? result.error.message : ""}`,
@@ -300,15 +478,18 @@ export function ReplayPage({ source = "local" }: ReplayPageProps) {
         isEventOnlyMediaDegraded(result.package, result.mediaBlob, result.warnings),
       );
       await scheduler.load(result.package);
-      if (cancelled) return;
+      if (cancelled || generation !== packageGenerationRef.current) return;
       if (initialSeekTimeMs !== null) {
-        await scheduler.seek(initialSeekTimeMs);
+        await seekReplay(initialSeekTimeMs);
       } else {
         setPosterState(buildFinalReplayStateFromPackage(result.package));
       }
     })();
     return () => {
       cancelled = true;
+      packageGenerationRef.current += 1;
+      seekGenerationRef.current += 1;
+      scheduler.invalidate?.();
     };
   }, [
     clearOverlayTimers,
@@ -317,6 +498,7 @@ export function ReplayPage({ source = "local" }: ReplayPageProps) {
     initialSeekTimeMs,
     packageLoader,
     scheduler,
+    seekReplay,
   ]);
 
   if (loadError) {
@@ -335,6 +517,7 @@ export function ReplayPage({ source = "local" }: ReplayPageProps) {
   const replayStage = (
     <div className="relative h-full min-h-0">
       <CodeEditor
+        ref={replayEditorRef}
         language={visibleStableState.editor.language}
         initialValue={visibleStableState.editor.code}
         value={visibleStableState.editor.code}
@@ -345,6 +528,8 @@ export function ReplayPage({ source = "local" }: ReplayPageProps) {
         selection={visibleStableState.editor.selection}
         scrollTop={visibleStableState.editor.scrollTop}
         scrollLeft={visibleStableState.editor.scrollLeft}
+        revealRange={featureFlags.subtitleAnchors ? revealRange : null}
+        onMount={() => setEditorReady(true)}
       />
       <ReplayVisualOverlays
         state={overlayState}
@@ -352,6 +537,7 @@ export function ReplayPage({ source = "local" }: ReplayPageProps) {
         showShortcut={displayOptions.shortcuts}
       />
       <RecordedMediaOverlay
+        key={`${source}:${id}:${pkg?.manifest.packageId ?? "loading"}`}
         videoRef={recordedMediaVideoRef}
         media={currentMedia}
         mediaBlob={mediaBlob}
@@ -366,7 +552,12 @@ export function ReplayPage({ source = "local" }: ReplayPageProps) {
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div
+      data-testid="replay-ready"
+      data-recording-id={pkg?.meta.id ?? ""}
+      data-ready={Boolean(pkg && editorReady)}
+      className="flex h-full min-h-0 flex-col"
+    >
       {eventOnlyNotice ? (
         <div
           role="status"
@@ -383,9 +574,7 @@ export function ReplayPage({ source = "local" }: ReplayPageProps) {
         options={displayOptions}
         onChange={setDisplayOption}
         share={
-          source === "cloud"
-            ? { busy: shareBusy, onShare: handleShareCurrentTime }
-            : undefined
+          source === "cloud" ? { busy: shareBusy, onShare: handleShareCurrentTime } : undefined
         }
       />
       {shareFeedback ? (
@@ -401,42 +590,54 @@ export function ReplayPage({ source = "local" }: ReplayPageProps) {
           {shareFeedback.message}
         </div>
       ) : null}
-      {displayOptions.runtime ? (
-        <ResizableWorkspace
-          ariaLabel="回放工作区"
-          separatorLabel="调整回放工作区宽度"
-          storageKey="code-tape:workspace:replay:left-percent"
-          leftClassName="min-h-[24rem] border-b border-border md:min-h-0 md:border-b-0"
-          rightClassName="flex flex-col"
-          left={replayStage}
-          right={
-            <ResizableWorkspace
-              orientation="vertical"
-              ariaLabel="回放预览与输出区"
-              separatorLabel="调整回放预览与输出区高度"
-              storageKey="code-tape:workspace:replay:preview-percent"
-              defaultLeftPercent={68}
-              minLeftPercent={30}
-              maxLeftPercent={85}
-              leftClassName="flex flex-col"
-              rightClassName="flex flex-col"
-              left={
-                <PreviewPane
-                  runtime={runtime}
-                  previewHtml={visibleStableState.runtime.previewHtml}
-                  theme={visibleStableState.editor.theme}
-                  className="min-h-0 flex-1"
-                />
-              }
-              right={<RuntimeOutputPanel runtime={visibleStableState.runtime} />}
-            />
-          }
-        />
-      ) : (
-        <div aria-label="回放工作区" className="grid min-h-0 flex-1 grid-cols-1">
-          {replayStage}
-        </div>
-      )}
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+        {displayOptions.runtime ? (
+          <ResizableWorkspace
+            ariaLabel="回放工作区"
+            separatorLabel="调整回放工作区宽度"
+            storageKey="code-tape:workspace:replay:left-percent"
+            leftClassName="min-h-[24rem] border-b border-border md:min-h-0 md:border-b-0"
+            rightClassName="flex flex-col"
+            left={replayStage}
+            right={
+              <ResizableWorkspace
+                orientation="vertical"
+                ariaLabel="回放预览与输出区"
+                separatorLabel="调整回放预览与输出区高度"
+                storageKey="code-tape:workspace:replay:preview-percent"
+                defaultLeftPercent={68}
+                minLeftPercent={30}
+                maxLeftPercent={85}
+                leftClassName="flex flex-col"
+                rightClassName="flex flex-col"
+                left={
+                  <PreviewPane
+                    runtime={runtime}
+                    previewHtml={visibleStableState.runtime.previewHtml}
+                    theme={visibleStableState.editor.theme}
+                    className="min-h-0 flex-1"
+                  />
+                }
+                right={<RuntimeOutputPanel runtime={visibleStableState.runtime} />}
+              />
+            }
+          />
+        ) : (
+          <div aria-label="回放工作区" className="grid min-h-0 flex-1 grid-cols-1">
+            {replayStage}
+          </div>
+        )}
+        {pkg && featureFlags.eventTimeline ? (
+          <EventTimeline
+            events={pkg.events}
+            currentTimeMs={schedulerState.timelineTimeMs}
+            onSeek={seekReplay}
+            renderAll={
+              import.meta.env.MODE === "performance" && searchParams.get("benchmark") === "full"
+            }
+          />
+        ) : null}
+      </div>
       {displayOptions.subtitles ? (
         <SubtitlePanel
           recordingId={pkg?.meta.id ?? null}
@@ -445,12 +646,11 @@ export function ReplayPage({ source = "local" }: ReplayPageProps) {
           durationMs={pkg?.meta.durationMs ?? 0}
           currentTimeMs={schedulerState.timelineTimeMs}
           onSeek={seekReplay}
-          postProcessorContext={{
-            language: visibleStableState.editor.language,
-            code: visibleStableState.editor.code,
-            runtimeOutput: replayRuntimeOutputText(visibleStableState.runtime),
-            glossary: DEFAULT_SUBTITLE_GLOSSARY,
-          }}
+          recordingPackage={pkg ?? undefined}
+          contextResolver={historicalContext?.resolve}
+          onAnchorSeek={featureFlags.subtitleAnchors ? seekCodeAnchor : undefined}
+          onCreateManualAnchor={featureFlags.subtitleAnchors ? createManualAnchor : undefined}
+          onResolveAnchor={featureFlags.subtitleAnchors ? resolveCodeAnchor : undefined}
         />
       ) : null}
       <ReplayControls
@@ -462,7 +662,9 @@ export function ReplayPage({ source = "local" }: ReplayPageProps) {
             ? pauseReplay()
             : playReplay()
         }
-        onSeek={seekReplay}
+        onSeek={async (targetMs) => {
+          await seekReplay(targetMs);
+        }}
         onRate={(rate) => scheduler.setRate(rate)}
         volume={volume}
         muted={muted}
@@ -492,12 +694,6 @@ const DEFAULT_SUBTITLE_GLOSSARY = [
   "code-tape",
   "RecordingPackageV1",
 ];
-
-function replayRuntimeOutputText(runtime: ReplayStableState["runtime"]): string {
-  return [...runtime.stdout, ...runtime.stderr, runtime.errorMessage]
-    .filter((line): line is string => Boolean(line))
-    .join("\n");
-}
 
 function overlayStateFromEvents(
   current: ReplayOverlayState,
@@ -565,6 +761,48 @@ function isMediaMetadataReady(video: HTMLVideoElement | null): boolean {
   return Boolean(video && !video.error && video.readyState >= 1);
 }
 
+/** A canceled seek removes its listener; stale seeked events must match the
+ * current requested position before completing the latest operation. */
+function seekVideoElement(
+  video: HTMLVideoElement,
+  targetSeconds: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  if (!video.seeking && Math.abs(video.currentTime - targetSeconds) < 0.05)
+    return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timeout);
+      video.removeEventListener("seeked", onSeeked);
+      video.removeEventListener("error", onError);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const finish = () => {
+      cleanup();
+      resolve();
+    };
+    const onAbort = () => finish();
+    const onSeeked = () => {
+      if (!video.seeking && Math.abs(video.currentTime - targetSeconds) < 0.05) finish();
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error("录制媒体定位失败，已保留事件回放。"));
+    };
+    const timeout = setTimeout(onError, 3_000);
+    video.addEventListener("seeked", onSeeked);
+    video.addEventListener("error", onError, { once: true });
+    signal?.addEventListener("abort", onAbort, { once: true });
+    try {
+      video.currentTime = targetSeconds;
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
+  });
+}
+
 function readRecordedMediaStatus(
   video: HTMLVideoElement | null,
 ): ReplaySchedulerState["mediaStatus"] {
@@ -582,7 +820,9 @@ function scheduleOverlayCleanup(
   pointerTimerRef: MutableRefObject<ReturnType<typeof setTimeout> | null>,
   shortcutTimerRef: MutableRefObject<ReturnType<typeof setTimeout> | null>,
 ) {
-  const hasPointer = transientEvents.some((event) => event.type === "mouse-move" || event.type === "mouse-click");
+  const hasPointer = transientEvents.some(
+    (event) => event.type === "mouse-move" || event.type === "mouse-click",
+  );
   const hasShortcut = transientEvents.some((event) => event.type === "shortcut");
   if (hasPointer) {
     if (pointerTimerRef.current) clearTimeout(pointerTimerRef.current);
@@ -757,12 +997,23 @@ function RecordedMediaOverlay({
   onStatusChange(): void;
 }) {
   const [src, setSrc] = useState<string | null>(null);
+  const ownedVideoRef = useRef<HTMLVideoElement | null>(null);
+  const attachVideo = useCallback(
+    (video: HTMLVideoElement | null) => {
+      if (video) ownedVideoRef.current = video;
+      videoRef.current = video;
+    },
+    [videoRef],
+  );
+  const latestPlaybackStatusRef = useRef(schedulerState.status);
+  latestPlaybackStatusRef.current = schedulerState.status;
   const [cameraAspectRatio, setCameraAspectRatio] = useState(DEFAULT_CAMERA_ASPECT_RATIO);
   const hasMedia = Boolean(media && mediaBlob);
   const hasCamera = Boolean(media?.hasCamera);
   const activeMediaTimeMs = timelineToRecordedMediaTime(media, schedulerState.timelineTimeMs);
   const isMediaSegmentActive = hasMedia && activeMediaTimeMs !== null;
-  const showCamera = showCameraLayer && isMediaSegmentActive && hasCamera && mediaState.cameraEnabled;
+  const showCamera =
+    showCameraLayer && isMediaSegmentActive && hasCamera && mediaState.cameraEnabled;
 
   useEffect(() => {
     if (!mediaBlob || typeof URL.createObjectURL !== "function") {
@@ -772,7 +1023,15 @@ function RecordedMediaOverlay({
     const url = URL.createObjectURL(mediaBlob);
     setSrc(url);
     setCameraAspectRatio(DEFAULT_CAMERA_ASPECT_RATIO);
-    return () => URL.revokeObjectURL(url);
+    return () => {
+      const video = ownedVideoRef.current;
+      if (video) {
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+      }
+      URL.revokeObjectURL(url);
+    };
   }, [mediaBlob]);
 
   useEffect(() => {
@@ -785,17 +1044,31 @@ function RecordedMediaOverlay({
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
+    let cancelled = false;
     if (!isMediaSegmentActive) {
       video.pause();
       return;
     }
     if (schedulerState.status === "playing" || schedulerState.status === "buffering") {
-      void video.play().catch((err) => {
-        console.warn("[replay-page] recorded media play failed:", err);
-      });
+      void video
+        .play()
+        .then(() => {
+          if (
+            cancelled &&
+            (videoRef.current !== video ||
+              !["playing", "buffering"].includes(latestPlaybackStatusRef.current))
+          )
+            video.pause();
+        })
+        .catch((err) => {
+          console.warn("[replay-page] recorded media play failed:", err);
+        });
     } else {
       video.pause();
     }
+    return () => {
+      cancelled = true;
+    };
   }, [isMediaSegmentActive, schedulerState.status, src, videoRef]);
 
   useEffect(() => {
@@ -830,7 +1103,7 @@ function RecordedMediaOverlay({
       style={showCamera ? style : undefined}
     >
       <video
-        ref={videoRef}
+        ref={attachVideo}
         aria-label={hasCamera ? "录制摄像头视频" : "录制音频"}
         src={src}
         className="h-full w-full object-contain"

@@ -2,7 +2,8 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { CloudResult } from "./types.js";
 
 /**
- * AuthTokenService — 短期签名 access token 的签发与校验。
+ * Legacy AuthTokenService — 兼容旧设备身份的服务测试适配器。
+ * 正式 runtime 使用 auth/accountAuthService 的账号与标准 JWT，禁用此 token 端点。
  *
  * 设计（见 issue #231，技术方案「登录体系」待确认问题，保持匿名设备身份）：
  * - 长期 refresh token = 前端持久化的设备 token（仅发往 /api/auth/token）。

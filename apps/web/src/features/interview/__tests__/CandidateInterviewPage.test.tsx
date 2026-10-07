@@ -3,6 +3,7 @@ import { StrictMode, type ComponentProps } from "react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appRoutes } from "@/app/routes";
+import { authClient } from "@/features/auth/authClient";
 import type { EventBus, RecordingEvent } from "@/shared/recording-schema";
 import { ThemeProvider } from "@/shared/ui/themeProvider";
 import { TooltipProvider } from "@/shared/ui/Tooltip";
@@ -18,6 +19,13 @@ import type {
   InterviewSignalingClientOptions,
 } from "../interviewSignalingClient";
 import { CandidateInterviewPage, CandidateInterviewView } from "../CandidateInterviewPage";
+
+const collaborationMock = vi.hoisted(() => ({ session: {} }));
+const featureFlagMock = vi.hoisted(() => ({ collaboration: true }));
+vi.mock("@/shared/featureFlags", () => ({ featureFlags: featureFlagMock }));
+vi.mock("@/features/collaboration/useCollaborationRoom", () => ({
+  useCollaborationRoom: (roomId: string | null) => ({ session: roomId ? collaborationMock.session : null, role: roomId ? "candidate" : null, error: null }),
+}));
 
 const recorderPageMock = vi.hoisted(() => {
   const listeners = new Set<(event: RecordingEvent) => void>();
@@ -36,6 +44,7 @@ const recorderPageMock = vi.hoisted(() => {
 
   return {
     bus,
+    calls: [] as Array<{ collaboration?: unknown }>,
     unsubscribe,
     emit(event: RecordingEvent) {
       history.push(event);
@@ -62,9 +71,12 @@ vi.mock("@/features/recorder/RecorderPage", async () => {
   return {
     RecorderPage({
       onEventBusReady,
+      collaboration,
     }: {
       onEventBusReady?: (bus: Pick<EventBus, "peek" | "subscribe">) => void | (() => void);
+      collaboration?: unknown;
     }) {
+      recorderPageMock.calls.push({ collaboration });
       React.useEffect(() => onEventBusReady?.(recorderPageMock.bus), [onEventBusReady]);
       return <div data-testid="recorder-workspace">Recorder workspace</div>;
     },
@@ -73,11 +85,33 @@ vi.mock("@/features/recorder/RecorderPage", async () => {
 
 describe("CandidateInterviewPage", () => {
   beforeEach(() => {
+    featureFlagMock.collaboration = true;
+    recorderPageMock.calls.length = 0;
     recorderPageMock.reset();
+  });
+
+  it("rolls back to the existing single-writer recorder when collaboration is disabled", async () => {
+    featureFlagMock.collaboration = false;
+    const roomClient = makeRoomClient(); const signaling = makeSignalingFactory();
+    renderCandidatePage({ initialEntry: "/interview/candidate", roomClient, createSignalingClient: signaling.create });
+    expect(await screen.findByTestId("recorder-workspace")).toBeInTheDocument();
+    expect(recorderPageMock.calls.at(-1)?.collaboration).toBeUndefined();
+    expect(roomClient.createRoom).toHaveBeenCalledTimes(1);
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("canonicalizes a created room URL without recreating or reconnecting its current session", async () => {
+    const roomClient = makeRoomClient();
+    const signaling = makeSignalingFactory();
+    const view = renderCandidatePage({ initialEntry: "/interview/candidate", roomClient, createSignalingClient: signaling.create });
+    await waitFor(() => expect(view.router.state.location.pathname).toBe("/interview/candidate/room-created"));
+    expect(roomClient.createRoom).toHaveBeenCalledTimes(1);
+    expect(roomClient.getRoom).not.toHaveBeenCalled();
+    expect(signaling.create).toHaveBeenCalledTimes(1);
+    expect(signaling.client.close).not.toHaveBeenCalled();
   });
 
   it("creates a room and connects candidate signaling from the candidate entry route", async () => {
@@ -1036,7 +1070,7 @@ describe("CandidateInterviewPage", () => {
     expect(media.session.addRemoteIceCandidate).not.toHaveBeenCalled();
   });
 
-  it("keeps the recorder workspace visible when candidate media setup fails", async () => {
+  it("keeps the recorder and data channel available when candidate media permission is denied", async () => {
     const roomClient = makeRoomClient();
     const signaling = makeSignalingFactory();
     const media = makeMediaSessionFactory({
@@ -1060,10 +1094,10 @@ describe("CandidateInterviewPage", () => {
       });
     });
 
-    expect(await screen.findAllByText("连接失败")).toHaveLength(2);
-    expect(screen.getByText("camera denied")).toBeInTheDocument();
+    await waitFor(() => expect(signaling.client.sendOffer).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("连接失败")).not.toBeInTheDocument();
     expect(screen.getByTestId("recorder-workspace")).toBeInTheDocument();
-    expect(media.session.close).toHaveBeenCalledTimes(1);
+    expect(media.session.close).not.toHaveBeenCalled();
   });
 
   it("keeps the recorder workspace visible when candidate events data channel setup fails", async () => {
@@ -1263,7 +1297,7 @@ describe("CandidateInterviewPage", () => {
     expect(signaling.create).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the recorder workspace visible when room creation fails", async () => {
+  it("offers local recording when creating a shared room fails", async () => {
     const roomClient = makeRoomClient({
       createRoom: vi.fn().mockResolvedValue({
         ok: false,
@@ -1280,11 +1314,11 @@ describe("CandidateInterviewPage", () => {
 
     expect(await screen.findAllByText("连接失败")).toHaveLength(2);
     expect(screen.getByText("offline")).toBeInTheDocument();
-    expect(screen.getByTestId("recorder-workspace")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "继续本地录制" })).toHaveAttribute("href", "/record");
     expect(signaling.create).not.toHaveBeenCalled();
   });
 
-  it("keeps the recorder workspace visible when room creation rejects", async () => {
+  it("offers local recording when creating a shared room rejects", async () => {
     const roomClient = makeRoomClient({
       createRoom: vi.fn().mockRejectedValue(new Error("fetch failed")),
     });
@@ -1298,7 +1332,7 @@ describe("CandidateInterviewPage", () => {
 
     expect(await screen.findAllByText("连接失败")).toHaveLength(2);
     expect(screen.getByText("fetch failed")).toBeInTheDocument();
-    expect(screen.getByTestId("recorder-workspace")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "继续本地录制" })).toHaveAttribute("href", "/record");
     expect(signaling.create).not.toHaveBeenCalled();
   });
 
@@ -1512,8 +1546,8 @@ describe("CandidateInterviewPage", () => {
     expect(media.session.close).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps routed candidate rooms in read-only recording mode without a join code", () => {
-    const roomClient = makeRoomClient();
+  it("restores an owned candidate room through authenticated membership without a query invitation", async () => {
+    const roomClient = makeRoomClient({ getRoom: vi.fn().mockResolvedValue({ ok: true, value: { roomId: "room-route", joinCode: "JOIN1234", status: "waiting", expiresAt: "2026-05-29T17:00:00.000Z", candidateConnected: false, interviewerConnected: false, signalingUrl: "/api/interviews/rooms/room-route/signaling" } }) });
     const signaling = makeSignalingFactory();
     const media = makeMediaSessionFactory();
 
@@ -1524,12 +1558,32 @@ describe("CandidateInterviewPage", () => {
       createMediaSession: media.create,
     });
 
+    await waitFor(() => expect(signaling.create).toHaveBeenCalledTimes(1));
     expect(screen.getByText("room-route")).toBeInTheDocument();
-    expect(screen.getByText("缺少 joinCode，当前仅展示候选人录制工作区")).toBeInTheDocument();
     expect(screen.getByTestId("recorder-workspace")).toBeInTheDocument();
     expect(roomClient.createRoom).not.toHaveBeenCalled();
-    expect(signaling.create).not.toHaveBeenCalled();
-    expect(media.create).not.toHaveBeenCalled();
+    expect(roomClient.getRoom).toHaveBeenCalledWith("room-route", "");
+    expect(media.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("generates a fresh invitation explicitly after restoring a room without its original code", async () => {
+    const request = vi.spyOn(authClient, "fetch").mockResolvedValue(new Response(JSON.stringify({ token: "FRESH-CODE", expiresAt: "2026-10-07T12:00:00Z" }), { status: 201, headers: { "content-type": "application/json" } }));
+    try {
+      renderCandidateView({
+        roomId: "restored-room",
+        roomState: { status: "waiting-interviewer", joinCode: null, interviewerOnline: false },
+        mediaState: makeMediaState(),
+        recordingWorkspace: <div>Recorder</div>,
+      });
+      expect(screen.getByRole("button", { name: "复制面试官链接" })).toBeDisabled();
+      fireEvent.click(screen.getByRole("button", { name: "重新生成邀请" }));
+      expect(await screen.findByText("FRESH-CODE")).toBeInTheDocument();
+      expect(screen.getByText(/\/interview\/interviewer\/restored-room\?joinCode=FRESH-CODE/u)).toBeInTheDocument();
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(request.mock.calls[0][1]?.method).toBe("POST");
+    } finally {
+      request.mockRestore();
+    }
   });
 
   it("renders the candidate room status and recording workspace", () => {
@@ -1576,25 +1630,14 @@ describe("CandidateInterviewPage", () => {
     expect(screen.getByRole("button", { name: "摄像头已关闭" })).toBeDisabled();
   });
 
-  it("registers the candidate interview route without replacing the recorder route", () => {
-    const router = createMemoryRouter(appRoutes, {
-      initialEntries: ["/interview/candidate/room-route"],
-    });
-
-    render(
-      <ThemeProvider>
-        <TooltipProvider>
-          <RouterProvider router={router} />
-        </TooltipProvider>
-      </ThemeProvider>,
-    );
-
-    expect(screen.getByRole("heading", { name: "候选人面试" })).toBeInTheDocument();
-    expect(screen.getByText("room-route")).toBeInTheDocument();
-    expect(screen.getByTestId("recorder-workspace")).toBeInTheDocument();
+  it("registers a lazily loaded candidate route without replacing the local recorder route", async () => {
+    const children = appRoutes[0].children ?? [];
+    const candidate = children.find((route) => route.path === "interview/candidate/:roomId?");
+    expect(candidate?.lazy).toBeTypeOf("function");
+    expect(children.find((route) => route.path === "record")?.lazy).toBeTypeOf("function");
   });
 
-  it("keeps the existing recorder route pointed at the recorder workspace", () => {
+  it("keeps the existing recorder route pointed at the recorder workspace", async () => {
     const router = createMemoryRouter(appRoutes, {
       initialEntries: ["/record"],
     });
@@ -1607,7 +1650,7 @@ describe("CandidateInterviewPage", () => {
       </ThemeProvider>,
     );
 
-    expect(screen.getByTestId("recorder-workspace")).toBeInTheDocument();
+    expect(await screen.findByTestId("recorder-workspace")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "候选人面试" })).not.toBeInTheDocument();
   });
 });
@@ -1650,7 +1693,7 @@ function renderCandidatePage({
       </TooltipProvider>
     </ThemeProvider>
   );
-  return render(strict ? <StrictMode>{tree}</StrictMode> : tree);
+  return { ...render(strict ? <StrictMode>{tree}</StrictMode> : tree), router };
 }
 
 function renderCandidateView(props: ComponentProps<typeof CandidateInterviewView>) {

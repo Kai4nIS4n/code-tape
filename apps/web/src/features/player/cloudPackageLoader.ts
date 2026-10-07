@@ -29,9 +29,7 @@ export type CloudPackageLoader = {
   load(recordingId: string): Promise<PackageLoadResult>;
 };
 
-export function createCloudPackageLoader(
-  options: CloudPackageLoaderOptions,
-): CloudPackageLoader {
+export function createCloudPackageLoader(options: CloudPackageLoaderOptions): CloudPackageLoader {
   const fetchImpl = options.fetch ?? globalThis.fetch?.bind(globalThis);
 
   return {
@@ -84,11 +82,7 @@ async function loadFromDescriptor(
   }
 }
 
-async function loadJsonAsset<T>(
-  fetchImpl: typeof fetch,
-  label: string,
-  url: string,
-): Promise<T> {
+async function loadJsonAsset<T>(fetchImpl: typeof fetch, label: string, url: string): Promise<T> {
   const response = await fetchImpl(url);
   if (!response.ok) {
     throw new Error(`${label} download failed: ${response.status} ${response.statusText}`);
@@ -132,8 +126,10 @@ function buildCloudMedia(input: {
     durationMs: input.meta.durationMs,
     sizeBytes: input.mediaBlob?.size ?? 0,
     timelineOffsetMs: 0,
-    hasAudio: input.meta.mediaCapability.audio === "available",
-    hasCamera: input.meta.mediaCapability.camera === "available",
+    // Legacy descriptors cannot prove tracks from device permission/capability.
+    // Keep media playback, but do not opt unknown audio into model preloading.
+    hasAudio: input.descriptor.hasAudio === true,
+    hasCamera: input.descriptor.hasCamera === true,
   };
 }
 

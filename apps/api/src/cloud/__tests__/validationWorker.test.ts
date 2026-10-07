@@ -1309,6 +1309,42 @@ for (const terminalStatus of ["purging", "deleted"] as const) {
 }
 
 
+test("cloud event budget counts raw unknown events before migration filtering", async () => {
+  const metadata = createMemoryMetadataRepository();
+  const objectStorage = createMemoryObjectStorage();
+  const service = createCloudRecordingService({ metadata, objectStorage });
+  const pkg = await makePackage();
+  pkg.schemaVersion = "0.1.0";
+  pkg.manifest.schemaVersion = "0.1.0";
+  pkg.events = Array.from({ length: 20001 }, (_, index) => ({
+    id: `future-${index}`,
+    seq: index + 1,
+    timestampMs: 0,
+    source: "editor",
+    track: "main",
+    type: "future-event",
+    payload: {},
+  })) as unknown as RecordingPackageV1["events"];
+  pkg.manifest.checksums.eventsSha256 = await sha256Hex(canonicalStringify(pkg.events));
+  const created = await service.createUploadSession({
+    ownerId: "owner-1",
+    input: await makeCreateSessionRequest(pkg),
+  });
+  assert.equal(created.ok, true);
+  if (!created.ok) return;
+  await uploadPackageAssets(objectStorage, created.value.uploadTargets, pkg);
+  await service.completeUpload({
+    ownerId: "owner-1",
+    sessionId: created.value.sessionId,
+    input: { uploadedAssets: await makeUploadedAssets(pkg) },
+  });
+  const job = await processNextRecordingValidationJob({ metadata, objectStorage });
+  assert.equal(job.ok, false);
+  if (job.ok || !("recording" in job)) return;
+  assert.equal(job.recording.failureCode, "quota-exceeded");
+  assert.match(job.recording.failureMessage ?? "", /20001/u);
+});
+
 async function makePackage(input: { mediaSha256?: string } = {}): Promise<RecordingPackageV1> {
   const events: RecordingPackageV1["events"] = [];
   const snapshots: RecordingPackageV1["snapshots"] = [];

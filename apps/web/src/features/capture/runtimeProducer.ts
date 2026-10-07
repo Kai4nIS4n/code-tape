@@ -6,6 +6,7 @@ import type {
 } from "./types";
 import type { CompileResult, IframeRunResult, RunErrorPayload } from "@/shared/recording-schema";
 import { generateId } from "@/shared/util/ids";
+import { canonicalStringify, sha256Hex } from "@/shared/util/hash";
 
 const RUNTIME_TIMEOUT_MS = 3000;
 
@@ -79,6 +80,8 @@ export const createRuntimeProducer: CreateRuntimeProducer = (deps): RuntimeProdu
   let stopped = false;
   let disposed = false;
   let running = false;
+  let activeRunId: string | null = null;
+  let recordCurrentRun = true;
 
   const assertActive = () => {
     if (paused || stopped || disposed) throw new Error("RuntimeProducer is not active");
@@ -86,6 +89,7 @@ export const createRuntimeProducer: CreateRuntimeProducer = (deps): RuntimeProdu
   };
 
   const emitRunError = (payload: RunErrorPayload) => {
+    if (stopped || disposed || payload.runId !== activeRunId || !recordCurrentRun) return;
     bus.emit({
       type: "run-error",
       source: "runtime",
@@ -151,18 +155,26 @@ export const createRuntimeProducer: CreateRuntimeProducer = (deps): RuntimeProdu
     stop() {
       stopped = true;
       paused = false;
+      activeRunId = null;
     },
     dispose() {
       disposed = true;
       stopped = true;
       paused = false;
+      activeRunId = null;
     },
     async trigger(input): Promise<RuntimeProducerRunResult> {
       assertActive();
       running = true;
+      // Freeze the exact inputs before the first asynchronous boundary.
+      input = { ...input, documents: input.documents ? { ...input.documents } : undefined };
+      recordCurrentRun = deps.shouldRecord?.() ?? true;
       try {
         const runId = generateId("run");
-        bus.emit({
+        activeRunId = runId;
+        const inputDocumentsHash = await sha256Hex(canonicalStringify({ language: input.language, activeScriptLanguage: input.activeScriptLanguage, source: input.source, documents: input.documents }));
+        if (stopped || disposed || activeRunId !== runId) throw new Error("Run was cancelled");
+        if (recordCurrentRun) bus.emit({
           type: "run-start",
           source: "runtime",
           track: "runtime",
@@ -170,6 +182,7 @@ export const createRuntimeProducer: CreateRuntimeProducer = (deps): RuntimeProdu
             language: input.language,
             runtime: "iframe",
             runId,
+            inputDocumentsHash,
           },
         });
 
@@ -183,7 +196,7 @@ export const createRuntimeProducer: CreateRuntimeProducer = (deps): RuntimeProdu
           } catch (err) {
             return emitRuntimeThrownError(runId, err);
           }
-          bus.emit({
+          if (recordCurrentRun && !stopped && !disposed && activeRunId === runId) bus.emit({
             type: "run-output",
             source: "runtime",
             track: "runtime",
@@ -221,7 +234,8 @@ export const createRuntimeProducer: CreateRuntimeProducer = (deps): RuntimeProdu
         }
 
         if (result.status === "complete") {
-          bus.emit({
+          if (stopped || disposed || activeRunId !== runId) return result;
+          if (recordCurrentRun) bus.emit({
             type: "run-output",
             source: "runtime",
             track: "runtime",

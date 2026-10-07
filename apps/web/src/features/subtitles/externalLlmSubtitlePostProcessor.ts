@@ -60,6 +60,7 @@ export function createExternalLlmSubtitlePostProcessor(
 
   return {
     async process(input) {
+      input = { ...input, strictValidation: input.strictValidation ?? true };
       throwIfAborted(input.signal);
       // One overall fail-fast budget for the WHOLE external attempt (all chunks
       // combined), so the external path never consumes more than requestTimeoutMs
@@ -77,8 +78,10 @@ export function createExternalLlmSubtitlePostProcessor(
           const result = await processChunk(chunk, input, config, fetchImpl, attempt.signal);
           merged.segments.push(...result.segments);
           merged.chapters?.push(...(result.chapters ?? []));
+          if (result.validationWarnings?.length)
+            (merged.validationWarnings ??= []).push(...result.validationWarnings);
         }
-        return constrainCorrectionToTrack(merged, input.track);
+        return constrainCorrectionToTrack(merged, input.track, input.strictValidation);
       } catch (error) {
         // The attempt's own deadline aborted us (not a user cancel): surface a
         // recoverable timeout so the fallback wrapper runs the local model.
@@ -133,7 +136,10 @@ function createExternalAttemptSignal(
 
 async function processChunk(
   track: SubtitleTrack,
-  input: { context?: Parameters<SubtitlePostProcessor["process"]>[0]["context"] },
+  input: {
+    context?: Parameters<SubtitlePostProcessor["process"]>[0]["context"];
+    strictValidation?: boolean;
+  },
   config: ExternalLlmConfig,
   fetchImpl: typeof fetch,
   signal: AbortSignal,
@@ -144,10 +150,16 @@ async function processChunk(
   );
   const generatedText = await requestCompletion(messages, config, fetchImpl, signal);
   try {
-    return constrainCorrectionToTrack(extractSubtitleCorrectionResult(generatedText), track);
+    return constrainCorrectionToTrack(
+      extractSubtitleCorrectionResult(generatedText, input.strictValidation),
+      track,
+      input.strictValidation,
+    );
   } catch (error) {
     if (!isRecoverableJsonOutputError(error)) throw error;
-    const recovered = recoverSubtitleCorrectionResult(generatedText, track);
+    const recovered = input.strictValidation
+      ? null
+      : recoverSubtitleCorrectionResult(generatedText, track);
     if (recovered) return recovered;
     throw error;
   }
@@ -175,12 +187,15 @@ async function requestCompletion(
     // Deliberately omit the response body: a misconfigured proxy/endpoint could
     // echo request headers (the API key) or subtitle/code context, and this
     // error is surfaced to logs on fallback. Status + statusText is enough to act on.
-    throw new Error(`外部 LLM 返回 HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`);
+    throw new Error(
+      `外部 LLM 返回 HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`,
+    );
   }
   const payload: unknown = await response.json().catch(() => {
     throw new Error("外部 LLM 响应不是合法 JSON");
   });
-  const text = config.provider === "anthropic" ? readAnthropicText(payload) : readOpenAiText(payload);
+  const text =
+    config.provider === "anthropic" ? readAnthropicText(payload) : readOpenAiText(payload);
   if (!text) throw new Error("外部 LLM 响应缺少文本内容");
   return text;
 }
@@ -204,7 +219,10 @@ function buildOpenAiRequest(messages: SubtitlePostProcessorMessage[], config: Ex
   };
 }
 
-function buildAnthropicRequest(messages: SubtitlePostProcessorMessage[], config: ExternalLlmConfig) {
+function buildAnthropicRequest(
+  messages: SubtitlePostProcessorMessage[],
+  config: ExternalLlmConfig,
+) {
   const system = messages
     .filter((message) => message.role === "system")
     .map((message) => message.content)
@@ -248,8 +266,9 @@ function readAnthropicText(payload: unknown): string | null {
   const content = payload.content;
   if (!Array.isArray(content)) return null;
   const texts = content
-    .filter((block): block is { type: string; text: string } =>
-      isPlainObject(block) && block.type === "text" && typeof block.text === "string",
+    .filter(
+      (block): block is { type: string; text: string } =>
+        isPlainObject(block) && block.type === "text" && typeof block.text === "string",
     )
     .map((block) => block.text);
   return texts.length > 0 ? texts.join("") : null;
@@ -264,7 +283,9 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException ? error.name === "AbortError" : error instanceof Error && error.name === "AbortError";
+  return error instanceof DOMException
+    ? error.name === "AbortError"
+    : error instanceof Error && error.name === "AbortError";
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

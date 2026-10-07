@@ -11,6 +11,7 @@ import type {
 type SerializablePostProcessorInput = {
   track: SubtitleTrack;
   context?: SubtitlePostProcessorContext;
+  strictValidation?: boolean;
 };
 
 type WorkerRequest =
@@ -82,6 +83,7 @@ export function createWorkerBackedHuggingFaceSubtitlePostProcessor(
   let workerPromise: Promise<Worker> | null = null;
   let nextRequestId = 0;
   let workerVersion = 0;
+  let warmUpPromise: Promise<void> | null = null;
 
   const ensureWorker = () => {
     if (worker) return Promise.resolve(worker);
@@ -182,6 +184,7 @@ export function createWorkerBackedHuggingFaceSubtitlePostProcessor(
   };
 
   const terminateWorker = (error: unknown) => {
+    warmUpPromise = null;
     workerVersion += 1;
     // Aborting local LLM inference is deliberately coarse-grained: terminate the
     // worker so CPU-bound/WASM generation cannot keep running behind playback.
@@ -224,7 +227,13 @@ export function createWorkerBackedHuggingFaceSubtitlePostProcessor(
 
   return {
     async warmUp() {
-      await postRequest({ type: "warmUp" });
+      warmUpPromise ??= postRequest({ type: "warmUp" })
+        .then(() => undefined)
+        .catch((error: unknown) => {
+          warmUpPromise = null;
+          throw error;
+        });
+      await warmUpPromise;
     },
     async process(input) {
       const result = await postRequest(
@@ -233,6 +242,9 @@ export function createWorkerBackedHuggingFaceSubtitlePostProcessor(
           input: {
             track: input.track,
             context: input.context,
+            ...(input.strictValidation === undefined
+              ? {}
+              : { strictValidation: input.strictValidation }),
           },
         },
         input.signal,
@@ -241,6 +253,7 @@ export function createWorkerBackedHuggingFaceSubtitlePostProcessor(
       return result;
     },
     dispose() {
+      warmUpPromise = null;
       terminateWorker(createAbortError());
     },
   };

@@ -1,0 +1,1491 @@
+{
+  "schemaVersion": "0.2.0",
+  "manifest": {
+    "packageId": "pkg-749b80ea-6b07-4dd9-a292-b060cb9c4615",
+    "schemaVersion": "0.2.0",
+    "status": "complete",
+    "createdAt": "2026-10-07T09:50:17.847Z",
+    "completedAt": "2026-10-07T09:50:24.094Z",
+    "checksums": {
+      "eventsSha256": "25bb61e2633a37c98d99e4949c5353a20d4ec7bdefe9fe6c30b2cbf786ceae14",
+      "snapshotsSha256": "92dbe9446fb60c5e1104133b4a6d52670d995f9260f35396fc2e84b23309bd44",
+      "mediaSha256": "6f5d219fd76650f3214455248c0eb131cc3d9ec6421c16fd8917f6a7220beb57"
+    }
+  },
+  "meta": {
+    "id": "rec-5a9bb011-8497-43b5-894c-e2a4d5c37b97",
+    "title": "录制 2026/10/7 17:50:23",
+    "createdAt": "2026-10-07T09:50:17.847Z",
+    "durationMs": 6064,
+    "appVersion": "0.0.0",
+    "ownerId": null,
+    "creatorInfo": null,
+    "initialLanguage": "javascript",
+    "initialActiveScriptLanguage": "javascript",
+    "initialDocuments": {
+      "javascript": {
+        "code": "document.body.textContent = \"synthetic-media-0\";\nconsole.log(\"synthetic-step-0\");\n",
+        "cursor": {
+          "lineNumber": 3,
+          "column": 1
+        },
+        "selection": {
+          "startLineNumber": 3,
+          "startColumn": 1,
+          "endLineNumber": 3,
+          "endColumn": 1,
+          "selectionStartLineNumber": 3,
+          "selectionStartColumn": 1,
+          "positionLineNumber": 3,
+          "positionColumn": 1
+        },
+        "scrollTop": 0,
+        "scrollLeft": 0
+      },
+      "typescript": {
+        "code": "",
+        "cursor": null,
+        "selection": null,
+        "scrollTop": 0,
+        "scrollLeft": 0
+      },
+      "python": {
+        "code": "",
+        "cursor": null,
+        "selection": null,
+        "scrollTop": 0,
+        "scrollLeft": 0
+      },
+      "html": {
+        "code": "",
+        "cursor": null,
+        "selection": null,
+        "scrollTop": 0,
+        "scrollLeft": 0
+      },
+      "css": {
+        "code": "",
+        "cursor": null,
+        "selection": null,
+        "scrollTop": 0,
+        "scrollLeft": 0
+      }
+    },
+    "initialFontSize": 14,
+    "initialTheme": "light",
+    "mediaCapability": {
+      "audio": "available",
+      "camera": "available",
+      "selectedAudioDeviceId": "default",
+      "selectedCameraDeviceId": "cd1cd2625b1ca3b423cd94a3cbd655cf38492568ea3fed48473a826fdec9d762"
+    }
+  },
+  "events": [
+    {
+      "id": "e-2ee09c6d-c346-4412-ba44-8c48825ce08b",
+      "seq": 1,
+      "timestampMs": 0,
+      "wallTime": "2026-10-07T09:50:17.847Z",
+      "source": "recorder",
+      "track": "main",
+      "type": "record-start",
+      "payload": {
+        "initialLanguage": "javascript",
+        "initialActiveScriptLanguage": "javascript",
+        "initialDocuments": {
+          "javascript": {
+            "code": "document.body.textContent = \"synthetic-media-0\";\nconsole.log(\"synthetic-step-0\");\n",
+            "cursor": {
+              "lineNumber": 3,
+              "column": 1
+            },
+            "selection": {
+              "startLineNumber": 3,
+              "startColumn": 1,
+              "endLineNumber": 3,
+              "endColumn": 1,
+              "selectionStartLineNumber": 3,
+              "selectionStartColumn": 1,
+              "positionLineNumber": 3,
+              "positionColumn": 1
+            },
+            "scrollTop": 0,
+            "scrollLeft": 0
+          },
+          "typescript": {
+            "code": "",
+            "cursor": null,
+            "selection": null,
+            "scrollTop": 0,
+            "scrollLeft": 0
+          },
+          "python": {
+            "code": "",
+            "cursor": null,
+            "selection": null,
+            "scrollTop": 0,
+            "scrollLeft": 0
+          },
+          "html": {
+            "code": "",
+            "cursor": null,
+            "selection": null,
+            "scrollTop": 0,
+            "scrollLeft": 0
+          },
+          "css": {
+            "code": "",
+            "cursor": null,
+            "selection": null,
+            "scrollTop": 0,
+            "scrollLeft": 0
+          }
+        },
+        "initialFontSize": 14,
+        "initialTheme": "light",
+        "selectedAudioDeviceId": "default",
+        "selectedCameraDeviceId": "cd1cd2625b1ca3b423cd94a3cbd655cf38492568ea3fed48473a826fdec9d762",
+        "mediaCapability": {
+          "audio": "available",
+          "camera": "available",
+          "selectedAudioDeviceId": "default",
+          "selectedCameraDeviceId": "cd1cd2625b1ca3b423cd94a3cbd655cf38492568ea3fed48473a826fdec9d762"
+        }
+      }
+    },
+    {
+      "id": "e-7c8d1a13-c2a8-488d-898b-7bb406a67c5f",
+      "seq": 2,
+      "timestampMs": 1,
+      "wallTime": "2026-10-07T09:50:17.848Z",
+      "source": "media",
+      "track": "media",
+      "type": "media-toggle",
+      "payload": {
+        "microphoneEnabled": true,
+        "cameraEnabled": true
+      }
+    },
+    {
+      "id": "e-b49342ae-04cf-4d97-b26c-ef17c333ff07",
+      "seq": 3,
+      "timestampMs": 1,
+      "wallTime": "2026-10-07T09:50:17.848Z",
+      "source": "media",
+      "track": "ui",
+      "type": "camera-position",
+      "payload": {
+        "x": 0.85,
+        "y": 0.85
+      }
+    },
+    {
+      "id": "e-746d550c-4c12-4828-a3f7-784318dd892f",
+      "seq": 4,
+      "timestampMs": 1568,
+      "wallTime": "2026-10-07T09:50:19.415Z",
+      "source": "pointer",
+      "track": "ui",
+      "type": "mouse-move",
+      "payload": {
+        "x": 489.5,
+        "y": 365.5,
+        "containerWidth": 979.1875,
+        "containerHeight": 731.5
+      }
+    },
+    {
+      "id": "e-fb736c89-19ba-4942-af37-950b38c9b2a5",
+      "seq": 5,
+      "timestampMs": 1568,
+      "wallTime": "2026-10-07T09:50:19.415Z",
+      "source": "pointer",
+      "track": "ui",
+      "type": "mouse-click",
+      "payload": {
+        "x": 489.5,
+        "y": 365.5,
+        "containerWidth": 979.1875,
+        "containerHeight": 731.5,
+        "button": 0
+      }
+    },
+    {
+      "id": "e-12066501-b5c1-4817-a87e-c448d2e535c6",
+      "seq": 6,
+      "timestampMs": 1573,
+      "wallTime": "2026-10-07T09:50:19.420Z",
+      "source": "shortcut",
+      "track": "ui",
+      "type": "shortcut",
+      "payload": {
+        "keys": [
+          "Cmd",
+          "A"
+        ],
+        "label": "Cmd + A"
+      }
+    },
+    {
+      "id": "e-229754a8-6590-49fd-8c07-18ee7a88abac",
+      "seq": 7,
+      "timestampMs": 1575,
+      "wallTime": "2026-10-07T09:50:19.422Z",
+      "source": "editor",
+      "track": "main",
+      "type": "selection-change",
+      "payload": {
+        "documentId": "source:javascript",
+        "cursor": {
+          "lineNumber": 3,
+          "column": 1
+        },
+        "selection": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 3,
+          "endColumn": 1
+        }
+      }
+    },
+    {
+      "id": "e-c22c28c1-f7d8-4bf9-ba25-f892ffe5ea91",
+      "seq": 8,
+      "timestampMs": 1585,
+      "wallTime": "2026-10-07T09:50:19.432Z",
+      "source": "editor",
+      "track": "main",
+      "type": "selection-change",
+      "payload": {
+        "documentId": "source:javascript",
+        "cursor": {
+          "lineNumber": 3,
+          "column": 1
+        },
+        "selection": {
+          "startLineNumber": 3,
+          "startColumn": 1,
+          "endLineNumber": 3,
+          "endColumn": 1
+        }
+      }
+    },
+    {
+      "id": "e-20a56f47-a5f4-4030-a582-c903172ca529",
+      "seq": 9,
+      "timestampMs": 1616,
+      "wallTime": "2026-10-07T09:50:19.463Z",
+      "source": "editor",
+      "track": "main",
+      "type": "content-change",
+      "payload": {
+        "fileId": "main",
+        "documentId": "source:javascript",
+        "version": 1,
+        "code": "document.body.textContent = \"synthetic-media-1\";\nconsole.log(\"synthetic-step-1\");\n",
+        "contentHash": "fnv1a-62065e1b",
+        "language": "javascript",
+        "changeReason": "input",
+        "changeCount": 82,
+        "flushedBy": "run"
+      }
+    },
+    {
+      "id": "e-fb04c69f-65c6-49cf-bded-aea65b17776e",
+      "seq": 10,
+      "timestampMs": 1617,
+      "wallTime": "2026-10-07T09:50:19.464Z",
+      "source": "runtime",
+      "track": "runtime",
+      "type": "run-start",
+      "payload": {
+        "language": "javascript",
+        "runtime": "iframe",
+        "runId": "run-d5b6d60d-71ed-409d-a6d3-e99649962f80",
+        "inputDocumentsHash": "6a1c78bc1c5680b8e4346a982f8ff3bae15269de3f8d8b4c5608622d79c94133"
+      }
+    },
+    {
+      "id": "e-9276592a-7228-4582-85c0-df87b748fd8e",
+      "seq": 11,
+      "timestampMs": 1631,
+      "wallTime": "2026-10-07T09:50:19.478Z",
+      "source": "runtime",
+      "track": "runtime",
+      "type": "run-output",
+      "payload": {
+        "runId": "run-d5b6d60d-71ed-409d-a6d3-e99649962f80",
+        "stdout": [
+          "synthetic-step-1"
+        ],
+        "stderr": [],
+        "previewHtml": "<body>synthetic-media-1</body>",
+        "status": "success"
+      }
+    },
+    {
+      "id": "e-602546ab-5f5e-4ea7-a0a2-5e949ad8e582",
+      "seq": 12,
+      "timestampMs": 3067,
+      "wallTime": "2026-10-07T09:50:20.914Z",
+      "source": "pointer",
+      "track": "ui",
+      "type": "mouse-move",
+      "payload": {
+        "x": 489.5,
+        "y": 365.5,
+        "containerWidth": 979.1875,
+        "containerHeight": 731.5
+      }
+    },
+    {
+      "id": "e-ee47c4f7-b269-4f28-a621-8f2b0efb8e19",
+      "seq": 13,
+      "timestampMs": 3068,
+      "wallTime": "2026-10-07T09:50:20.915Z",
+      "source": "pointer",
+      "track": "ui",
+      "type": "mouse-click",
+      "payload": {
+        "x": 489.5,
+        "y": 365.5,
+        "containerWidth": 979.1875,
+        "containerHeight": 731.5,
+        "button": 0
+      }
+    },
+    {
+      "id": "e-9f6d844b-bc34-4bbb-b557-906424520170",
+      "seq": 14,
+      "timestampMs": 3072,
+      "wallTime": "2026-10-07T09:50:20.919Z",
+      "source": "shortcut",
+      "track": "ui",
+      "type": "shortcut",
+      "payload": {
+        "keys": [
+          "Cmd",
+          "A"
+        ],
+        "label": "Cmd + A"
+      }
+    },
+    {
+      "id": "e-ab32fea7-f681-40c9-9e4c-d397c5e66bfe",
+      "seq": 15,
+      "timestampMs": 3072,
+      "wallTime": "2026-10-07T09:50:20.919Z",
+      "source": "editor",
+      "track": "main",
+      "type": "selection-change",
+      "payload": {
+        "documentId": "source:javascript",
+        "cursor": {
+          "lineNumber": 3,
+          "column": 1
+        },
+        "selection": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 3,
+          "endColumn": 1
+        }
+      }
+    },
+    {
+      "id": "e-9d0c9801-5f1b-4679-8e7a-c432a1fefa5b",
+      "seq": 16,
+      "timestampMs": 3078,
+      "wallTime": "2026-10-07T09:50:20.925Z",
+      "source": "editor",
+      "track": "main",
+      "type": "selection-change",
+      "payload": {
+        "documentId": "source:javascript",
+        "cursor": {
+          "lineNumber": 3,
+          "column": 1
+        },
+        "selection": {
+          "startLineNumber": 3,
+          "startColumn": 1,
+          "endLineNumber": 3,
+          "endColumn": 1
+        }
+      }
+    },
+    {
+      "id": "e-66c0773e-cca3-446d-bfeb-cee885014366",
+      "seq": 17,
+      "timestampMs": 3115,
+      "wallTime": "2026-10-07T09:50:20.962Z",
+      "source": "editor",
+      "track": "main",
+      "type": "content-change",
+      "payload": {
+        "fileId": "main",
+        "documentId": "source:javascript",
+        "version": 2,
+        "code": "document.body.textContent = \"synthetic-media-2\";\nconsole.log(\"synthetic-step-2\");\n",
+        "contentHash": "fnv1a-51fd15b",
+        "language": "javascript",
+        "changeReason": "input",
+        "changeCount": 82,
+        "flushedBy": "run"
+      }
+    },
+    {
+      "id": "e-2b0e555a-6d36-4a27-80c8-8b15b158d32b",
+      "seq": 18,
+      "timestampMs": 3115,
+      "wallTime": "2026-10-07T09:50:20.962Z",
+      "source": "runtime",
+      "track": "runtime",
+      "type": "run-start",
+      "payload": {
+        "language": "javascript",
+        "runtime": "iframe",
+        "runId": "run-7bed5b5f-3405-41ed-aa6b-e1fa6ebd9b38",
+        "inputDocumentsHash": "dc8b13df3b6bb799083a210b9b610bf188df2cce317916b915bf97a22a08cdd9"
+      }
+    },
+    {
+      "id": "e-88f97e83-7af0-4c63-bc51-1de23f388dea",
+      "seq": 19,
+      "timestampMs": 3131,
+      "wallTime": "2026-10-07T09:50:20.978Z",
+      "source": "runtime",
+      "track": "runtime",
+      "type": "run-output",
+      "payload": {
+        "runId": "run-7bed5b5f-3405-41ed-aa6b-e1fa6ebd9b38",
+        "stdout": [
+          "synthetic-step-2"
+        ],
+        "stderr": [],
+        "previewHtml": "<body>synthetic-media-2</body>",
+        "status": "success"
+      }
+    },
+    {
+      "id": "e-10c1ccd8-12a7-4da6-baf4-70448d73121b",
+      "seq": 20,
+      "timestampMs": 4567,
+      "wallTime": "2026-10-07T09:50:22.414Z",
+      "source": "pointer",
+      "track": "ui",
+      "type": "mouse-move",
+      "payload": {
+        "x": 489.5,
+        "y": 365.5,
+        "containerWidth": 979.1875,
+        "containerHeight": 731.5
+      }
+    },
+    {
+      "id": "e-ac777afb-c77f-48a1-a39c-6b8f9dc8c597",
+      "seq": 21,
+      "timestampMs": 4569,
+      "wallTime": "2026-10-07T09:50:22.416Z",
+      "source": "pointer",
+      "track": "ui",
+      "type": "mouse-click",
+      "payload": {
+        "x": 489.5,
+        "y": 365.5,
+        "containerWidth": 979.1875,
+        "containerHeight": 731.5,
+        "button": 0
+      }
+    },
+    {
+      "id": "e-a0e523d7-ff30-45ba-b1a9-cf345fa2f6a3",
+      "seq": 22,
+      "timestampMs": 4577,
+      "wallTime": "2026-10-07T09:50:22.424Z",
+      "source": "shortcut",
+      "track": "ui",
+      "type": "shortcut",
+      "payload": {
+        "keys": [
+          "Cmd",
+          "A"
+        ],
+        "label": "Cmd + A"
+      }
+    },
+    {
+      "id": "e-62f24f0b-97a7-4f8f-adb8-2815b574244d",
+      "seq": 23,
+      "timestampMs": 4577,
+      "wallTime": "2026-10-07T09:50:22.424Z",
+      "source": "editor",
+      "track": "main",
+      "type": "selection-change",
+      "payload": {
+        "documentId": "source:javascript",
+        "cursor": {
+          "lineNumber": 3,
+          "column": 1
+        },
+        "selection": {
+          "startLineNumber": 1,
+          "startColumn": 1,
+          "endLineNumber": 3,
+          "endColumn": 1
+        }
+      }
+    },
+    {
+      "id": "e-9bd358a1-8e6e-4b4f-a0f3-b95f405583dd",
+      "seq": 24,
+      "timestampMs": 4589,
+      "wallTime": "2026-10-07T09:50:22.436Z",
+      "source": "editor",
+      "track": "main",
+      "type": "selection-change",
+      "payload": {
+        "documentId": "source:javascript",
+        "cursor": {
+          "lineNumber": 3,
+          "column": 1
+        },
+        "selection": {
+          "startLineNumber": 3,
+          "startColumn": 1,
+          "endLineNumber": 3,
+          "endColumn": 1
+        }
+      }
+    },
+    {
+      "id": "e-74000df6-0b99-4394-8a59-881c835dbd71",
+      "seq": 25,
+      "timestampMs": 4617,
+      "wallTime": "2026-10-07T09:50:22.464Z",
+      "source": "editor",
+      "track": "main",
+      "type": "content-change",
+      "payload": {
+        "fileId": "main",
+        "documentId": "source:javascript",
+        "version": 3,
+        "code": "document.body.textContent = \"synthetic-media-3\";\nconsole.log(\"synthetic-step-3\");\n",
+        "contentHash": "fnv1a-2c2b2a3",
+        "language": "javascript",
+        "changeReason": "input",
+        "changeCount": 82,
+        "flushedBy": "run"
+      }
+    },
+    {
+      "id": "e-ee06a6ec-8888-4369-b003-49c937e0aecf",
+      "seq": 26,
+      "timestampMs": 4618,
+      "wallTime": "2026-10-07T09:50:22.465Z",
+      "source": "runtime",
+      "track": "runtime",
+      "type": "run-start",
+      "payload": {
+        "language": "javascript",
+        "runtime": "iframe",
+        "runId": "run-6f372529-78d4-4411-bea4-4fcc14dff6eb",
+        "inputDocumentsHash": "a214a03e18fbe3c9146ca0fd87164a4c254b78905c34512d6e8cd5f6b836eadf"
+      }
+    },
+    {
+      "id": "e-d4bbc2cf-e56f-4e81-85be-d694fd3d314c",
+      "seq": 27,
+      "timestampMs": 4632,
+      "wallTime": "2026-10-07T09:50:22.479Z",
+      "source": "runtime",
+      "track": "runtime",
+      "type": "run-output",
+      "payload": {
+        "runId": "run-6f372529-78d4-4411-bea4-4fcc14dff6eb",
+        "stdout": [
+          "synthetic-step-3"
+        ],
+        "stderr": [],
+        "previewHtml": "<body>synthetic-media-3</body>",
+        "status": "success"
+      }
+    },
+    {
+      "id": "e-26830b00-6ecb-43c2-b651-f38ad90224dc",
+      "seq": 28,
+      "timestampMs": 6064,
+      "wallTime": "2026-10-07T09:50:23.911Z",
+      "source": "recorder",
+      "track": "main",
+      "type": "record-stop",
+      "payload": {
+        "durationMs": 6064,
+        "reason": "user"
+      }
+    }
+  ],
+  "snapshots": [
+    {
+      "id": "snap-410c0261-97bd-4335-8c6c-8666bf0b1ff7",
+      "timestampMs": 0,
+      "eventSeq": 1,
+      "state": {
+        "editor": {
+          "code": "document.body.textContent = \"synthetic-media-0\";\nconsole.log(\"synthetic-step-0\");\n",
+          "language": "javascript",
+          "activeDocumentId": "source:javascript",
+          "activeScriptLanguage": "javascript",
+          "documents": {
+            "javascript": {
+              "code": "document.body.textContent = \"synthetic-media-0\";\nconsole.log(\"synthetic-step-0\");\n",
+              "cursor": {
+                "lineNumber": 3,
+                "column": 1
+              },
+              "selection": {
+                "startLineNumber": 3,
+                "startColumn": 1,
+                "endLineNumber": 3,
+                "endColumn": 1,
+                "selectionStartLineNumber": 3,
+                "selectionStartColumn": 1,
+                "positionLineNumber": 3,
+                "positionColumn": 1
+              },
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "typescript": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "python": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "html": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "css": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            }
+          },
+          "cursor": {
+            "lineNumber": 3,
+            "column": 1
+          },
+          "selection": {
+            "startLineNumber": 3,
+            "startColumn": 1,
+            "endLineNumber": 3,
+            "endColumn": 1,
+            "selectionStartLineNumber": 3,
+            "selectionStartColumn": 1,
+            "positionLineNumber": 3,
+            "positionColumn": 1
+          },
+          "scrollTop": 0,
+          "scrollLeft": 0,
+          "fontSize": 14,
+          "theme": "light"
+        },
+        "pointer": null,
+        "media": {
+          "microphoneEnabled": false,
+          "cameraEnabled": false,
+          "cameraPosition": {
+            "x": 0,
+            "y": 0
+          }
+        },
+        "runtime": {
+          "status": "idle",
+          "stdout": [],
+          "stderr": [],
+          "previewHtml": null,
+          "errorMessage": null
+        }
+      }
+    },
+    {
+      "id": "snap-e9c7bd77-ba66-41d7-88a5-ce33d7f1686b",
+      "timestampMs": 1617,
+      "eventSeq": 10,
+      "state": {
+        "editor": {
+          "code": "document.body.textContent = \"synthetic-media-1\";\nconsole.log(\"synthetic-step-1\");\n",
+          "language": "javascript",
+          "activeDocumentId": "source:javascript",
+          "activeScriptLanguage": "javascript",
+          "documents": {
+            "javascript": {
+              "code": "document.body.textContent = \"synthetic-media-1\";\nconsole.log(\"synthetic-step-1\");\n",
+              "cursor": {
+                "lineNumber": 3,
+                "column": 1
+              },
+              "selection": {
+                "startLineNumber": 3,
+                "startColumn": 1,
+                "endLineNumber": 3,
+                "endColumn": 1
+              },
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "typescript": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "python": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "html": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "css": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            }
+          },
+          "cursor": {
+            "lineNumber": 3,
+            "column": 1
+          },
+          "selection": {
+            "startLineNumber": 3,
+            "startColumn": 1,
+            "endLineNumber": 3,
+            "endColumn": 1
+          },
+          "scrollTop": 0,
+          "scrollLeft": 0,
+          "fontSize": 14,
+          "theme": "light"
+        },
+        "pointer": null,
+        "media": {
+          "microphoneEnabled": true,
+          "cameraEnabled": true,
+          "cameraPosition": {
+            "x": 0.85,
+            "y": 0.85
+          }
+        },
+        "runtime": {
+          "status": "running",
+          "stdout": [],
+          "stderr": [],
+          "previewHtml": null,
+          "errorMessage": null,
+          "activeRunId": "run-d5b6d60d-71ed-409d-a6d3-e99649962f80",
+          "inputDocumentsHash": "6a1c78bc1c5680b8e4346a982f8ff3bae15269de3f8d8b4c5608622d79c94133"
+        }
+      }
+    },
+    {
+      "id": "snap-73281625-c8e2-4af8-bca1-69a7491859dd",
+      "timestampMs": 1631,
+      "eventSeq": 11,
+      "state": {
+        "editor": {
+          "code": "document.body.textContent = \"synthetic-media-1\";\nconsole.log(\"synthetic-step-1\");\n",
+          "language": "javascript",
+          "activeDocumentId": "source:javascript",
+          "activeScriptLanguage": "javascript",
+          "documents": {
+            "javascript": {
+              "code": "document.body.textContent = \"synthetic-media-1\";\nconsole.log(\"synthetic-step-1\");\n",
+              "cursor": {
+                "lineNumber": 3,
+                "column": 1
+              },
+              "selection": {
+                "startLineNumber": 3,
+                "startColumn": 1,
+                "endLineNumber": 3,
+                "endColumn": 1
+              },
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "typescript": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "python": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "html": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "css": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            }
+          },
+          "cursor": {
+            "lineNumber": 3,
+            "column": 1
+          },
+          "selection": {
+            "startLineNumber": 3,
+            "startColumn": 1,
+            "endLineNumber": 3,
+            "endColumn": 1
+          },
+          "scrollTop": 0,
+          "scrollLeft": 0,
+          "fontSize": 14,
+          "theme": "light"
+        },
+        "pointer": null,
+        "media": {
+          "microphoneEnabled": true,
+          "cameraEnabled": true,
+          "cameraPosition": {
+            "x": 0.85,
+            "y": 0.85
+          }
+        },
+        "runtime": {
+          "status": "success",
+          "stdout": [
+            "synthetic-step-1"
+          ],
+          "stderr": [],
+          "previewHtml": "<body>synthetic-media-1</body>",
+          "errorMessage": null,
+          "activeRunId": "run-d5b6d60d-71ed-409d-a6d3-e99649962f80",
+          "inputDocumentsHash": "6a1c78bc1c5680b8e4346a982f8ff3bae15269de3f8d8b4c5608622d79c94133"
+        }
+      }
+    },
+    {
+      "id": "snap-f750a012-14ea-4cb8-9c88-a23ec0131694",
+      "timestampMs": 3115,
+      "eventSeq": 18,
+      "state": {
+        "editor": {
+          "code": "document.body.textContent = \"synthetic-media-2\";\nconsole.log(\"synthetic-step-2\");\n",
+          "language": "javascript",
+          "activeDocumentId": "source:javascript",
+          "activeScriptLanguage": "javascript",
+          "documents": {
+            "javascript": {
+              "code": "document.body.textContent = \"synthetic-media-2\";\nconsole.log(\"synthetic-step-2\");\n",
+              "cursor": {
+                "lineNumber": 3,
+                "column": 1
+              },
+              "selection": {
+                "startLineNumber": 3,
+                "startColumn": 1,
+                "endLineNumber": 3,
+                "endColumn": 1
+              },
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "typescript": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "python": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "html": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "css": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            }
+          },
+          "cursor": {
+            "lineNumber": 3,
+            "column": 1
+          },
+          "selection": {
+            "startLineNumber": 3,
+            "startColumn": 1,
+            "endLineNumber": 3,
+            "endColumn": 1
+          },
+          "scrollTop": 0,
+          "scrollLeft": 0,
+          "fontSize": 14,
+          "theme": "light"
+        },
+        "pointer": null,
+        "media": {
+          "microphoneEnabled": true,
+          "cameraEnabled": true,
+          "cameraPosition": {
+            "x": 0.85,
+            "y": 0.85
+          }
+        },
+        "runtime": {
+          "status": "running",
+          "stdout": [],
+          "stderr": [],
+          "previewHtml": null,
+          "errorMessage": null,
+          "activeRunId": "run-7bed5b5f-3405-41ed-aa6b-e1fa6ebd9b38",
+          "inputDocumentsHash": "dc8b13df3b6bb799083a210b9b610bf188df2cce317916b915bf97a22a08cdd9"
+        }
+      }
+    },
+    {
+      "id": "snap-a00684d0-2976-4c2b-a570-6d878a24ae19",
+      "timestampMs": 3131,
+      "eventSeq": 19,
+      "state": {
+        "editor": {
+          "code": "document.body.textContent = \"synthetic-media-2\";\nconsole.log(\"synthetic-step-2\");\n",
+          "language": "javascript",
+          "activeDocumentId": "source:javascript",
+          "activeScriptLanguage": "javascript",
+          "documents": {
+            "javascript": {
+              "code": "document.body.textContent = \"synthetic-media-2\";\nconsole.log(\"synthetic-step-2\");\n",
+              "cursor": {
+                "lineNumber": 3,
+                "column": 1
+              },
+              "selection": {
+                "startLineNumber": 3,
+                "startColumn": 1,
+                "endLineNumber": 3,
+                "endColumn": 1
+              },
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "typescript": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "python": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "html": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "css": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            }
+          },
+          "cursor": {
+            "lineNumber": 3,
+            "column": 1
+          },
+          "selection": {
+            "startLineNumber": 3,
+            "startColumn": 1,
+            "endLineNumber": 3,
+            "endColumn": 1
+          },
+          "scrollTop": 0,
+          "scrollLeft": 0,
+          "fontSize": 14,
+          "theme": "light"
+        },
+        "pointer": null,
+        "media": {
+          "microphoneEnabled": true,
+          "cameraEnabled": true,
+          "cameraPosition": {
+            "x": 0.85,
+            "y": 0.85
+          }
+        },
+        "runtime": {
+          "status": "success",
+          "stdout": [
+            "synthetic-step-2"
+          ],
+          "stderr": [],
+          "previewHtml": "<body>synthetic-media-2</body>",
+          "errorMessage": null,
+          "activeRunId": "run-7bed5b5f-3405-41ed-aa6b-e1fa6ebd9b38",
+          "inputDocumentsHash": "dc8b13df3b6bb799083a210b9b610bf188df2cce317916b915bf97a22a08cdd9"
+        }
+      }
+    },
+    {
+      "id": "snap-ffd9a756-0aff-4074-b842-c3267df1eccd",
+      "timestampMs": 4618,
+      "eventSeq": 26,
+      "state": {
+        "editor": {
+          "code": "document.body.textContent = \"synthetic-media-3\";\nconsole.log(\"synthetic-step-3\");\n",
+          "language": "javascript",
+          "activeDocumentId": "source:javascript",
+          "activeScriptLanguage": "javascript",
+          "documents": {
+            "javascript": {
+              "code": "document.body.textContent = \"synthetic-media-3\";\nconsole.log(\"synthetic-step-3\");\n",
+              "cursor": {
+                "lineNumber": 3,
+                "column": 1
+              },
+              "selection": {
+                "startLineNumber": 3,
+                "startColumn": 1,
+                "endLineNumber": 3,
+                "endColumn": 1
+              },
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "typescript": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "python": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "html": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "css": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            }
+          },
+          "cursor": {
+            "lineNumber": 3,
+            "column": 1
+          },
+          "selection": {
+            "startLineNumber": 3,
+            "startColumn": 1,
+            "endLineNumber": 3,
+            "endColumn": 1
+          },
+          "scrollTop": 0,
+          "scrollLeft": 0,
+          "fontSize": 14,
+          "theme": "light"
+        },
+        "pointer": null,
+        "media": {
+          "microphoneEnabled": true,
+          "cameraEnabled": true,
+          "cameraPosition": {
+            "x": 0.85,
+            "y": 0.85
+          }
+        },
+        "runtime": {
+          "status": "running",
+          "stdout": [],
+          "stderr": [],
+          "previewHtml": null,
+          "errorMessage": null,
+          "activeRunId": "run-6f372529-78d4-4411-bea4-4fcc14dff6eb",
+          "inputDocumentsHash": "a214a03e18fbe3c9146ca0fd87164a4c254b78905c34512d6e8cd5f6b836eadf"
+        }
+      }
+    },
+    {
+      "id": "snap-8a9efacd-fe93-48d5-8042-2b813c442f82",
+      "timestampMs": 4632,
+      "eventSeq": 27,
+      "state": {
+        "editor": {
+          "code": "document.body.textContent = \"synthetic-media-3\";\nconsole.log(\"synthetic-step-3\");\n",
+          "language": "javascript",
+          "activeDocumentId": "source:javascript",
+          "activeScriptLanguage": "javascript",
+          "documents": {
+            "javascript": {
+              "code": "document.body.textContent = \"synthetic-media-3\";\nconsole.log(\"synthetic-step-3\");\n",
+              "cursor": {
+                "lineNumber": 3,
+                "column": 1
+              },
+              "selection": {
+                "startLineNumber": 3,
+                "startColumn": 1,
+                "endLineNumber": 3,
+                "endColumn": 1
+              },
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "typescript": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "python": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "html": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "css": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            }
+          },
+          "cursor": {
+            "lineNumber": 3,
+            "column": 1
+          },
+          "selection": {
+            "startLineNumber": 3,
+            "startColumn": 1,
+            "endLineNumber": 3,
+            "endColumn": 1
+          },
+          "scrollTop": 0,
+          "scrollLeft": 0,
+          "fontSize": 14,
+          "theme": "light"
+        },
+        "pointer": null,
+        "media": {
+          "microphoneEnabled": true,
+          "cameraEnabled": true,
+          "cameraPosition": {
+            "x": 0.85,
+            "y": 0.85
+          }
+        },
+        "runtime": {
+          "status": "success",
+          "stdout": [
+            "synthetic-step-3"
+          ],
+          "stderr": [],
+          "previewHtml": "<body>synthetic-media-3</body>",
+          "errorMessage": null,
+          "activeRunId": "run-6f372529-78d4-4411-bea4-4fcc14dff6eb",
+          "inputDocumentsHash": "a214a03e18fbe3c9146ca0fd87164a4c254b78905c34512d6e8cd5f6b836eadf"
+        }
+      }
+    },
+    {
+      "id": "snap-a16bb33f-b547-43bc-90da-d45b67891b88",
+      "timestampMs": 6064,
+      "eventSeq": 28,
+      "state": {
+        "editor": {
+          "code": "document.body.textContent = \"synthetic-media-3\";\nconsole.log(\"synthetic-step-3\");\n",
+          "language": "javascript",
+          "activeDocumentId": "source:javascript",
+          "activeScriptLanguage": "javascript",
+          "documents": {
+            "javascript": {
+              "code": "document.body.textContent = \"synthetic-media-3\";\nconsole.log(\"synthetic-step-3\");\n",
+              "cursor": {
+                "lineNumber": 3,
+                "column": 1
+              },
+              "selection": {
+                "startLineNumber": 3,
+                "startColumn": 1,
+                "endLineNumber": 3,
+                "endColumn": 1
+              },
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "typescript": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "python": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "html": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            },
+            "css": {
+              "code": "",
+              "cursor": null,
+              "selection": null,
+              "scrollTop": 0,
+              "scrollLeft": 0
+            }
+          },
+          "cursor": {
+            "lineNumber": 3,
+            "column": 1
+          },
+          "selection": {
+            "startLineNumber": 3,
+            "startColumn": 1,
+            "endLineNumber": 3,
+            "endColumn": 1
+          },
+          "scrollTop": 0,
+          "scrollLeft": 0,
+          "fontSize": 14,
+          "theme": "light"
+        },
+        "pointer": null,
+        "media": {
+          "microphoneEnabled": true,
+          "cameraEnabled": true,
+          "cameraPosition": {
+            "x": 0.85,
+            "y": 0.85
+          }
+        },
+        "runtime": {
+          "status": "success",
+          "stdout": [
+            "synthetic-step-3"
+          ],
+          "stderr": [],
+          "previewHtml": "<body>synthetic-media-3</body>",
+          "errorMessage": null,
+          "activeRunId": "run-6f372529-78d4-4411-bea4-4fcc14dff6eb",
+          "inputDocumentsHash": "a214a03e18fbe3c9146ca0fd87164a4c254b78905c34512d6e8cd5f6b836eadf"
+        }
+      }
+    }
+  ],
+  "indexes": {
+    "generatedAt": "2026-10-07T09:50:23.941Z",
+    "eventsByType": {
+      "record-start": [
+        1
+      ],
+      "record-pause": [],
+      "record-resume": [],
+      "resume-baseline": [],
+      "record-stop": [
+        28
+      ],
+      "content-change": [
+        9,
+        17,
+        25
+      ],
+      "language-change": [],
+      "selection-change": [
+        7,
+        8,
+        15,
+        16,
+        23,
+        24
+      ],
+      "editor-scroll": [],
+      "mouse-move": [
+        4,
+        12,
+        20
+      ],
+      "mouse-click": [
+        5,
+        13,
+        21
+      ],
+      "shortcut": [
+        6,
+        14,
+        22
+      ],
+      "media-toggle": [
+        2
+      ],
+      "media-warning": [],
+      "camera-position": [
+        3
+      ],
+      "run-start": [
+        10,
+        18,
+        26
+      ],
+      "run-output": [
+        11,
+        19,
+        27
+      ],
+      "run-error": [],
+      "chapter-marker": []
+    },
+    "snapshotSeqsByTime": [
+      1,
+      10,
+      11,
+      18,
+      19,
+      26,
+      27,
+      28
+    ],
+    "markers": [],
+    "activityDensity": [
+      {
+        "kind": "edit",
+        "startMs": 0,
+        "endMs": 6064,
+        "count": 9,
+        "eventSeqs": [
+          7,
+          8,
+          9,
+          15,
+          16,
+          17,
+          23,
+          24,
+          25
+        ]
+      },
+      {
+        "kind": "shortcut",
+        "startMs": 0,
+        "endMs": 6064,
+        "count": 3,
+        "eventSeqs": [
+          6,
+          14,
+          22
+        ]
+      },
+      {
+        "kind": "run",
+        "startMs": 0,
+        "endMs": 6064,
+        "count": 6,
+        "eventSeqs": [
+          10,
+          11,
+          18,
+          19,
+          26,
+          27
+        ]
+      }
+    ]
+  },
+  "media": {
+    "blobId": "blob-2c453d3b-bd82-43fc-b1a7-e8b23fb80636",
+    "mimeType": "video/webm;codecs=vp9,opus",
+    "durationMs": 6064,
+    "sizeBytes": 468375,
+    "timelineOffsetMs": 0,
+    "hasAudio": true,
+    "hasCamera": true
+  }
+}

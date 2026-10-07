@@ -1,0 +1,304 @@
+{
+  "experiment": "isolated-browser-real-model-smoke",
+  "startedAt": "2026-10-07T12:15:03.560Z",
+  "node": "v24.19.0",
+  "root": "/private/tmp/codetape-upgrade.HJUZz8",
+  "privacy": {
+    "physicalDevicesUsed": false,
+    "userProfileUsed": false,
+    "paidApiUsed": false,
+    "offOriginRequestsBlocked": true
+  },
+  "method": "Vite source modules; unchanged real model loaders; ASR WASM fp32 and production LLM Worker WASM q8; no accuracy claim",
+  "flows": [
+    {
+      "kind": "asr",
+      "outcome": "completed",
+      "lastPhase": "inference",
+      "stages": [
+        {
+          "phase": "import",
+          "state": "started",
+          "elapsedMs": 178,
+          "modelAssetResponses": 0
+        },
+        {
+          "phase": "import",
+          "state": "completed",
+          "durationMs": 142,
+          "elapsedMs": 322,
+          "modelAssetResponses": 0
+        },
+        {
+          "phase": "cold-warmup",
+          "state": "started",
+          "elapsedMs": 323,
+          "modelAssetResponses": 0
+        },
+        {
+          "phase": "cold-warmup",
+          "state": "completed",
+          "durationMs": 1185,
+          "elapsedMs": 1509,
+          "modelAssetResponses": 11
+        },
+        {
+          "phase": "reuse-warmup",
+          "state": "started",
+          "elapsedMs": 1512,
+          "modelAssetResponses": 11
+        },
+        {
+          "phase": "reuse-warmup",
+          "state": "completed",
+          "durationMs": 0,
+          "elapsedMs": 1516,
+          "modelAssetResponses": 11
+        },
+        {
+          "phase": "inference",
+          "state": "started",
+          "elapsedMs": 1517,
+          "modelAssetResponses": 11
+        },
+        {
+          "phase": "inference",
+          "state": "completed",
+          "durationMs": 1145,
+          "elapsedMs": 2663,
+          "modelAssetResponses": 11
+        }
+      ],
+      "resources": [
+        {
+          "phase": "cold-warmup",
+          "path": "/models/onnx-community/whisper-tiny/config.json",
+          "status": 200,
+          "fromServiceWorker": false
+        },
+        {
+          "phase": "cold-warmup",
+          "path": "/models/onnx-community/whisper-tiny/tokenizer_config.json",
+          "status": 200,
+          "fromServiceWorker": false
+        },
+        {
+          "phase": "cold-warmup",
+          "path": "/models/onnx-community/whisper-tiny/preprocessor_config.json",
+          "status": 200,
+          "fromServiceWorker": false
+        },
+        {
+          "phase": "cold-warmup",
+          "path": "/models/onnx-community/whisper-tiny/preprocessor_config.json",
+          "status": 200,
+          "fromServiceWorker": false
+        },
+        {
+          "phase": "cold-warmup",
+          "path": "/models/onnx-community/whisper-tiny/tokenizer.json",
+          "status": 200,
+          "fromServiceWorker": false
+        },
+        {
+          "phase": "cold-warmup",
+          "path": "/models/onnx-community/whisper-tiny/tokenizer_config.json",
+          "status": 200,
+          "fromServiceWorker": false
+        },
+        {
+          "phase": "cold-warmup",
+          "path": "/models/onnx-community/whisper-tiny/onnx/encoder_model.onnx",
+          "status": 200,
+          "fromServiceWorker": false
+        },
+        {
+          "phase": "cold-warmup",
+          "path": "/models/onnx-community/whisper-tiny/onnx/decoder_model_merged.onnx",
+          "status": 200,
+          "fromServiceWorker": false
+        },
+        {
+          "phase": "cold-warmup",
+          "path": "/models/onnx-community/whisper-tiny/generation_config.json",
+          "status": 200,
+          "fromServiceWorker": false
+        },
+        {
+          "phase": "cold-warmup",
+          "path": "/ort/ort-wasm-simd-threaded.asyncify.mjs",
+          "status": 200,
+          "fromServiceWorker": false
+        },
+        {
+          "phase": "cold-warmup",
+          "path": "/ort/ort-wasm-simd-threaded.asyncify.wasm",
+          "status": 200,
+          "fromServiceWorker": false
+        }
+      ],
+      "blockedRequests": [],
+      "errors": [],
+      "deadlineMs": 60000,
+      "result": {
+        "model": "onnx-community/whisper-tiny",
+        "source": "huggingface-local",
+        "segmentCount": 1,
+        "emptyText": false,
+        "timestampContractValid": true
+      },
+      "reuse": {
+        "noModelFetchAfterColdWarmup": true,
+        "note": "Same recognizer/worker object reused; real model source, no injected factories"
+      },
+      "durationMs": 2674
+    },
+    {
+      "kind": "llm",
+      "outcome": "failed",
+      "lastPhase": "inference",
+      "stages": [
+        {
+          "phase": "import",
+          "state": "started",
+          "elapsedMs": 159,
+          "modelAssetResponses": 0
+        },
+        {
+          "phase": "import",
+          "state": "completed",
+          "durationMs": 13,
+          "elapsedMs": 174,
+          "modelAssetResponses": 0
+        },
+        {
+          "phase": "cold-warmup",
+          "state": "started",
+          "elapsedMs": 174,
+          "modelAssetResponses": 0
+        },
+        {
+          "phase": "worker-metric",
+          "status": "success",
+          "model": "ceilf6/code-tape-subtitle-postprocessor-onnx",
+          "workerLoadDurationMs": 4.100000023841858,
+          "workerRequestDurationMs": 1983,
+          "totalDurationMs": 1999.4000000357628,
+          "workerPhase": "warmUp",
+          "elapsedMs": 2176,
+          "modelAssetResponses": 8
+        },
+        {
+          "phase": "cold-warmup",
+          "state": "completed",
+          "durationMs": 2000,
+          "elapsedMs": 2176,
+          "modelAssetResponses": 8
+        },
+        {
+          "phase": "reuse-warmup",
+          "state": "started",
+          "elapsedMs": 2177,
+          "modelAssetResponses": 8
+        },
+        {
+          "phase": "reuse-warmup",
+          "state": "completed",
+          "durationMs": 0,
+          "elapsedMs": 2177,
+          "modelAssetResponses": 8
+        },
+        {
+          "phase": "inference",
+          "state": "started",
+          "elapsedMs": 2178,
+          "modelAssetResponses": 8
+        },
+        {
+          "phase": "worker-metric",
+          "status": "error",
+          "model": "ceilf6/code-tape-subtitle-postprocessor-onnx",
+          "workerLoadDurationMs": 0,
+          "workerRequestDurationMs": 9742.5,
+          "totalDurationMs": 9743.800000011921,
+          "workerPhase": "process",
+          "elapsedMs": 11924,
+          "modelAssetResponses": 8
+        },
+        {
+          "phase": "inference",
+          "state": "failed",
+          "durationMs": 9745,
+          "error": "LLM 输出中未找到完整 JSON 对象",
+          "elapsedMs": 11924,
+          "modelAssetResponses": 8
+        }
+      ],
+      "resources": [
+        {
+          "phase": "cold-warmup",
+          "path": "/models/ceilf6/code-tape-subtitle-postprocessor-onnx/config.json",
+          "status": 200,
+          "fromServiceWorker": false
+        },
+        {
+          "phase": "cold-warmup",
+          "path": "/models/ceilf6/code-tape-subtitle-postprocessor-onnx/tokenizer_config.json",
+          "status": 200,
+          "fromServiceWorker": false
+        },
+        {
+          "phase": "cold-warmup",
+          "path": "/models/ceilf6/code-tape-subtitle-postprocessor-onnx/tokenizer_config.json",
+          "status": 200,
+          "fromServiceWorker": false
+        },
+        {
+          "phase": "cold-warmup",
+          "path": "/models/ceilf6/code-tape-subtitle-postprocessor-onnx/tokenizer.json",
+          "status": 200,
+          "fromServiceWorker": false
+        },
+        {
+          "phase": "cold-warmup",
+          "path": "/models/ceilf6/code-tape-subtitle-postprocessor-onnx/onnx/model_quantized.onnx",
+          "status": 200,
+          "fromServiceWorker": false
+        },
+        {
+          "phase": "cold-warmup",
+          "path": "/models/ceilf6/code-tape-subtitle-postprocessor-onnx/generation_config.json",
+          "status": 200,
+          "fromServiceWorker": false
+        },
+        {
+          "phase": "cold-warmup",
+          "path": "/ort/ort-wasm-simd-threaded.asyncify.wasm",
+          "status": 200,
+          "fromServiceWorker": false
+        },
+        {
+          "phase": "cold-warmup",
+          "path": "/ort/ort-wasm-simd-threaded.asyncify.mjs",
+          "status": 200,
+          "fromServiceWorker": false
+        }
+      ],
+      "blockedRequests": [],
+      "errors": [],
+      "deadlineMs": 60000,
+      "error": "page.evaluate: Error: LLM 输出中未找到完整 JSON 对象\n    at deserializeWorkerError (http://127.0.0.1:62819/src/features/subtitles/subtitlePostProcessorWorkerClient.ts:168:24)\n    at Worker.handleWorkerMessage (http://127.0.0.1:62819/src/features/subtitles/subtitlePostProcessorWorkerClient.ts:123:19)",
+      "durationMs": 11930
+    }
+  ],
+  "fixture": {
+    "bytes": 468375,
+    "sha256": "bc2df51f639b304c27243aab12892cf028d2351ecae74f7aff9d02a7eac88a2c",
+    "clockDurationMs": 6064,
+    "note": "Synthetic fake-device sound, not a speech accuracy fixture"
+  },
+  "origin": "http://127.0.0.1:62819",
+  "browser": "155.0.8059.40",
+  "completedAt": "2026-10-07T12:15:19.788Z",
+  "ok": false
+}

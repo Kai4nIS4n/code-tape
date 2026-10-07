@@ -28,7 +28,7 @@ type MonacoSelectionLike = {
   endLineNumber: number;
   endColumn: number;
 };
-type ScrollPosition = { scrollTop: number; scrollLeft: number };
+type ScrollPosition = { documentId: `source:${RecordingLanguage}`; scrollTop: number; scrollLeft: number };
 type PendingContent = {
   code: string;
   contentHash: string;
@@ -120,6 +120,7 @@ export const createEditorProducer: CreateEditorProducer = (deps): EditorProducer
       track: "main",
       payload: {
         fileId: "main",
+        documentId: `source:${pending.language}`,
         version,
         code: pending.code,
         contentHash: pending.contentHash,
@@ -144,6 +145,7 @@ export const createEditorProducer: CreateEditorProducer = (deps): EditorProducer
       source: "editor",
       track: "main",
       payload: {
+        documentId: `source:${readLanguage()}`,
         cursor: editor.getPosition(),
         selection: toSelection(editor.getSelection()),
       },
@@ -176,6 +178,7 @@ export const createEditorProducer: CreateEditorProducer = (deps): EditorProducer
   const scheduleScroll = (editor: MonacoEditor.IStandaloneCodeEditor) => {
     if (!isCapturingEditorChanges()) return;
     pendingScroll = {
+      documentId: `source:${readLanguage()}`,
       scrollTop: editor.getScrollTop(),
       scrollLeft: editor.getScrollLeft(),
     };
@@ -186,7 +189,7 @@ export const createEditorProducer: CreateEditorProducer = (deps): EditorProducer
     editor: MonacoEditor.IStandaloneCodeEditor,
     event: ContentChangedEvent,
   ) => {
-    if (!isListening()) return;
+    if (!isListening() || deps.captureContent === false) return;
     if (suppressEditorChangeDepth > 0) {
       pendingContent = null;
       clearContentTimers();
@@ -304,6 +307,7 @@ export const createEditorProducer: CreateEditorProducer = (deps): EditorProducer
   });
 
   const emitResumeBaselineIfNeeded = () => {
+    if (deps.emitResumeBaseline === false) return;
     syncEditor();
     if (!currentEditor || !pausedState) return;
     const nextState = snapshotState(currentEditor);
@@ -331,6 +335,7 @@ export const createEditorProducer: CreateEditorProducer = (deps): EditorProducer
     pause() {
       if (stopped || disposed || paused) return;
       emitContent("pause");
+      emitPendingScroll();
       syncEditor();
       pausedState = currentEditor ? snapshotState(currentEditor) : null;
       paused = true;

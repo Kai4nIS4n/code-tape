@@ -58,6 +58,17 @@ export async function processNextRecordingValidationJob(deps: {
       assetsByKind.get("events"),
       fetchedObjects,
     );
+    // Count the original uploaded stream before compatibility strips unknown
+    // future event types. Otherwise filtering could bypass the cloud budget.
+    if (Array.isArray(events) && events.length > MAX_RECORDING_EVENT_COUNT) {
+      return failRecording(
+        deps.metadata,
+        recording,
+        now,
+        "quota-exceeded",
+        `event count exceeds budget limit of ${MAX_RECORDING_EVENT_COUNT}: ${events.length}`,
+      );
+    }
     const snapshots = await readJsonAsset<RecordingSnapshot[]>(
       assetsByKind.get("snapshots"),
       fetchedObjects,

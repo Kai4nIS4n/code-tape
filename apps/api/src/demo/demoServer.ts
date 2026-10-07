@@ -1,6 +1,10 @@
 import { readFile, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, resolve, sep } from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { createSecureRuntime, type SecureRuntimeOptions, type SecureRuntime } from "./secureRuntime.js";
+import { ApiFailure } from "../auth/accountAuthService.js";
 import { createCloudRecordingService } from "../cloud/cloudRecordingService.js";
 import { createAuthTokenService } from "../cloud/authTokenService.js";
 import { createLocalDevObjectStorage } from "../cloud/localDevObjectStorage.js";
@@ -15,15 +19,18 @@ import { createLocalDevObjectStorageHandler } from "../http/localDevObjectStorag
 import { createInterviewSignalingServer } from "../signaling/interviewSignalingServer.js";
 import { createInterviewWebSocketUpgradeHandler } from "../signaling/interviewWebSocketUpgradeHandler.js";
 
-export type DemoRequestHandlerOptions = {
+export type DemoRequestHandlerOptions = SecureRuntimeOptions & {
   webRoot: string;
   publicBaseUrl?: string;
   createRequestId?: () => string;
+  /** Only old service fixtures may enable the anonymous in-memory adapter. */
+  legacyTestMode?: boolean;
 };
 
 export type DemoRuntime = {
   handler: CloudApiHandler;
   server: Server;
+  controls?: SecureRuntime;
   close(): void;
 };
 
@@ -32,12 +39,14 @@ export function createDemoRequestHandler(options: DemoRequestHandlerOptions): Cl
 }
 
 export function createDemoRuntime(options: DemoRequestHandlerOptions): DemoRuntime {
+  if (!options.legacyTestMode) return createAuthenticatedDemoRuntime(options);
   const webRoot = resolve(options.webRoot);
   const metadata = createMemoryMetadataRepository();
   const objectStorage = createLocalDevObjectStorage({
     publicBaseUrl: options.publicBaseUrl ?? "",
   });
   const cloud = createCloudApiHandler({
+    allowLegacyAuth: true,
     service: createCloudRecordingService({ metadata, objectStorage }),
     auth: createAuthTokenService({ secret: process.env.CODE_TAPE_AUTH_SECRET }),
     createRequestId: options.createRequestId,
@@ -87,6 +96,23 @@ export function createDemoRuntime(options: DemoRequestHandlerOptions): DemoRunti
       upgrade.close();
     },
   };
+}
+
+function createAuthenticatedDemoRuntime(options: DemoRequestHandlerOptions): DemoRuntime {
+  const webRoot = resolve(options.webRoot);
+  const dataRoot = resolve(options.dataDirectory ?? process.env.CODE_TAPE_DATA_DIR ?? ".code-tape-data");
+  if (isInsideRoot(webRoot, dataRoot)) throw new Error("CODE_TAPE_DATA_DIR must be outside the public web root");
+  const runtime = createSecureRuntime(options);
+  const handler: CloudApiHandler = request => {
+    const path = new URL(request.url).pathname;
+    return isDemoApiPath(path) ? runtime.handler(request) : serveStatic({ request, webRoot });
+  };
+  const server = createServer((incoming, outgoing) => { void sendNodeResponse(handler, incoming, outgoing); });
+  server.on("upgrade", (request, socket, head) => {
+    if (runtime.sockets.canHandle(request)) runtime.sockets.handleUpgrade(request, socket, head);
+    else socket.destroy();
+  });
+  return {handler,server,controls:runtime,close:()=>runtime.close()};
 }
 
 async function serveStatic(input: {
@@ -184,29 +210,43 @@ async function sendNodeResponse(
     const response = await handler(request);
     outgoing.statusCode = response.status;
     response.headers.forEach((value, key) => outgoing.setHeader(key, value));
-    outgoing.end(Buffer.from(await response.arrayBuffer()));
+    if (request.body && !incoming.readableEnded) {
+      // Let Node flush the rejection response, then close the unread stream
+      // through normal Connection: close handling without buffering the body.
+      outgoing.setHeader("connection", "close");
+    }
+    if (response.body) await pipeline(Readable.fromWeb(response.body as import("node:stream/web").ReadableStream), outgoing);
+    else outgoing.end();
   } catch (error) {
-    outgoing.statusCode = 500;
+    outgoing.statusCode = error instanceof ApiFailure ? error.status : 500;
     outgoing.setHeader("content-type", "text/plain; charset=utf-8");
-    outgoing.end(error instanceof Error ? error.message : "Internal Server Error");
+    outgoing.setHeader("connection", "close");
+    outgoing.end(error instanceof ApiFailure ? error.message : "Internal Server Error");
   }
 }
 
 async function toWebRequest(incoming: IncomingMessage): Promise<Request> {
   const url = new URL(incoming.url ?? "/", `http://${incoming.headers.host ?? "localhost"}`);
-  const body = await readIncomingBody(incoming);
+  const hasBody = incoming.method !== "GET" && incoming.method !== "HEAD";
+  const limit = incoming.url?.startsWith("/api/uploads/") ? 250 * 1024 * 1024 : 2 * 1024 * 1024;
+  let size = 0;
+  const body = hasBody
+    ? (Readable.toWeb(incoming) as unknown as ReadableStream<Uint8Array>).pipeThrough(
+        new TransformStream<Uint8Array, Uint8Array>({
+          transform(chunk, controller) {
+            size += chunk.byteLength;
+            if (size > limit) {
+              throw new ApiFailure(413, "quota-exceeded", "request body exceeds upload budget");
+            }
+            controller.enqueue(chunk);
+          },
+        }),
+      )
+    : undefined;
   return new Request(url, {
     method: incoming.method,
-    headers: incoming.headers as HeadersInit,
-    body: body.byteLength > 0 ? new Uint8Array(body) : undefined,
-  });
-}
-
-function readIncomingBody(incoming: IncomingMessage): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    incoming.on("data", (chunk: Buffer) => chunks.push(chunk));
-    incoming.on("end", () => resolve(Buffer.concat(chunks)));
-    incoming.on("error", reject);
-  });
+    headers: { ...incoming.headers as Record<string,string>, "x-code-tape-peer": incoming.socket.remoteAddress ?? "unknown" },
+    body,
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
 }

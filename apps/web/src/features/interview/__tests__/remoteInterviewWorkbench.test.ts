@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { RecordingEvent, ReplayStableState } from "@/shared/recording-schema";
 import {
   createRemoteInterviewWorkbench,
@@ -129,6 +129,47 @@ function snapshotMessage(snapshotSeq: number, code: string) {
 }
 
 describe("RemoteInterviewWorkbench", () => {
+  it("logs safe buffer/snapshot sequence boundaries instead of editor state", () => {
+    const sink = vi.fn();
+    const workbench = createRemoteInterviewWorkbench({
+      initialState: initialState(),
+      debug: { enabled: true, sink },
+    });
+    workbench.pushRecordingEvent(messageFor(contentEvent(2, "PRIVATE EVENT CODE")));
+    workbench.pushSnapshot(snapshotMessage(1, "PRIVATE SNAPSHOT CODE"));
+    workbench.pushRecordingEvent(
+      hashedMessageFor(contentEvent(3, "PRIVATE HASH CODE"), "fnv1a-deadbeef"),
+    );
+    expect(sink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "observer-event",
+        outcome: "buffered",
+        roomId: "room-1",
+        recordingSessionId: "session-1",
+        seq: 2,
+        expectedSeq: 1,
+        lastAppliedSeq: 0,
+      }),
+    );
+    expect(sink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "observer-snapshot",
+        outcome: "applied",
+        snapshotSeq: 1,
+        expectedSeq: 3,
+        lastAppliedSeq: 2,
+      }),
+    );
+    expect(sink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "observer-event",
+        outcome: "hash-mismatch",
+        expectedSeq: 3,
+        lastAppliedSeq: 2,
+      }),
+    );
+    expect(JSON.stringify(sink.mock.calls)).not.toContain("PRIVATE");
+  });
   it("applies out-of-order remote events through the replay reducer in candidate seq order", () => {
     const workbench = createRemoteInterviewWorkbench({ initialState: initialState() });
 

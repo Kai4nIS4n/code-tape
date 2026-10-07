@@ -5,6 +5,12 @@
 @tailwind components;
 @tailwind utilities;
 
+.code-tape-subtitle-code-highlight {
+  background: rgba(79, 126, 255, 0.18);
+  outline: 1px solid rgba(79, 126, 255, 0.45);
+  border-radius: 2px;
+}
+
 @layer base {
   *,
   *::before,

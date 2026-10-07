@@ -1,4 +1,24 @@
 import "@testing-library/jest-dom/vitest";
+import { transferableAbortController } from "node:util";
+
+// React Router uses Node's native Request in jsdom. Bridge only its signal;
+// DOM listeners keep using jsdom's AbortSignal, so both brands remain valid.
+const NativeRequest = globalThis.Request;
+if (NativeRequest) {
+  globalThis.Request = class JsdomRequest extends NativeRequest {
+    constructor(input: RequestInfo | URL, init?: RequestInit) {
+      if (init?.signal) {
+        const source = init.signal;
+        const controller = transferableAbortController();
+        if (source.aborted) controller.abort(source.reason);
+        else
+          source.addEventListener("abort", () => controller.abort(source.reason), { once: true });
+        init = { ...init, signal: controller.signal };
+      }
+      super(input, init);
+    }
+  };
+}
 
 // jsdom 25 doesn't implement Blob.arrayBuffer()/stream(); polyfill with an
 // in-process buffer so feature code that reads media bytes (packageBuilder,

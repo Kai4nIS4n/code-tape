@@ -1,6 +1,6 @@
 import { act, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CodeEditorProps } from "@/features/editor/CodeEditor";
+import type { CodeEditorHandle, CodeEditorProps } from "@/features/editor/CodeEditor";
 import type { PreviewPaneProps } from "@/features/runtime-preview/PreviewPane";
 import type { SubtitlePanelProps } from "@/features/subtitles";
 import type { CloudPlaybackDescriptor } from "@/features/cloud/types";
@@ -11,6 +11,7 @@ import type {
 } from "@/shared/recording-schema";
 import { canonicalStringify, sha256Hex } from "@/shared/util/hash";
 import type * as ReactRouterDom from "react-router-dom";
+import type * as ReactTypes from "react";
 
 const replayIntegrationMock = vi.hoisted(() => {
   const schedulerState: ReplaySchedulerState = {
@@ -69,14 +70,22 @@ vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof ReactRouterDom>("react-router-dom");
   return {
     ...actual,
-    useParams: () => ({ id: replayIntegrationMock.routeId, token: replayIntegrationMock.routeToken }),
+    useParams: () => ({
+      id: replayIntegrationMock.routeId,
+      token: replayIntegrationMock.routeToken,
+    }),
     useSearchParams: () => [new URLSearchParams(replayIntegrationMock.search), vi.fn()],
   };
 });
 
-vi.mock("@/features/editor/CodeEditor", () => ({
-  CodeEditor: (_props: CodeEditorProps) => <div aria-label="Mock code editor" />,
-}));
+vi.mock("@/features/editor/CodeEditor", async () => {
+  const { forwardRef } = await vi.importActual<typeof ReactTypes>("react");
+  return {
+    CodeEditor: forwardRef<CodeEditorHandle, CodeEditorProps>(() => (
+      <div aria-label="Mock code editor" />
+    )),
+  };
+});
 
 vi.mock("@/features/runtime-preview/PreviewPane", () => ({
   PreviewPane: (_props: PreviewPaneProps) => <div aria-label="Mock preview pane" />,
@@ -139,18 +148,23 @@ describe("ReplayPage cloud package loader integration", () => {
       ok: true,
       value: makeDescriptor(),
     });
-    vi.stubGlobal("fetch", makeAssetFetch({
-      "https://assets.example.com/manifest.json": jsonResponse(parts.manifest),
-      "https://assets.example.com/meta.json": jsonResponse(parts.meta),
-      "https://assets.example.com/events.json": jsonResponse(parts.events),
-      "https://assets.example.com/snapshots.json": jsonResponse(parts.snapshots),
-    }));
+    vi.stubGlobal(
+      "fetch",
+      makeAssetFetch({
+        "https://assets.example.com/manifest.json": jsonResponse(parts.manifest),
+        "https://assets.example.com/meta.json": jsonResponse(parts.meta),
+        "https://assets.example.com/events.json": jsonResponse(parts.events),
+        "https://assets.example.com/snapshots.json": jsonResponse(parts.snapshots),
+      }),
+    );
     const { ReplayPage } = await import("../ReplayPage");
 
     render(<ReplayPage source="cloud" />);
 
     await waitFor(() => {
-      expect(replayIntegrationMock.descriptorRepository.getPlaybackDescriptor).toHaveBeenCalledWith("cloud-rec-1");
+      expect(replayIntegrationMock.descriptorRepository.getPlaybackDescriptor).toHaveBeenCalledWith(
+        "cloud-rec-1",
+      );
     });
     await waitFor(() => {
       expect(replayIntegrationMock.scheduler.load).toHaveBeenCalledWith(
@@ -175,25 +189,30 @@ describe("ReplayPage cloud package loader integration", () => {
       ok: true,
       value: makeDescriptor({ id: "shared-rec-1", durationMs: 60_000 }),
     });
-    vi.stubGlobal("fetch", makeAssetFetch({
-      "https://assets.example.com/manifest.json": jsonResponse({
-        ...parts.manifest,
-        packageId: "shared-rec-1",
+    vi.stubGlobal(
+      "fetch",
+      makeAssetFetch({
+        "https://assets.example.com/manifest.json": jsonResponse({
+          ...parts.manifest,
+          packageId: "shared-rec-1",
+        }),
+        "https://assets.example.com/meta.json": jsonResponse({
+          ...parts.meta,
+          id: "shared-rec-1",
+          durationMs: 60_000,
+        }),
+        "https://assets.example.com/events.json": jsonResponse(parts.events),
+        "https://assets.example.com/snapshots.json": jsonResponse(parts.snapshots),
       }),
-      "https://assets.example.com/meta.json": jsonResponse({
-        ...parts.meta,
-        id: "shared-rec-1",
-        durationMs: 60_000,
-      }),
-      "https://assets.example.com/events.json": jsonResponse(parts.events),
-      "https://assets.example.com/snapshots.json": jsonResponse(parts.snapshots),
-    }));
+    );
     const { ReplayPage } = await import("../ReplayPage");
 
     render(<ReplayPage source="share" />);
 
     await waitFor(() => {
-      expect(replayIntegrationMock.descriptorRepository.getSharedPlaybackDescriptor).toHaveBeenCalledWith("share-token-1");
+      expect(
+        replayIntegrationMock.descriptorRepository.getSharedPlaybackDescriptor,
+      ).toHaveBeenCalledWith("share-token-1");
     });
     expect(replayIntegrationMock.descriptorRepository.getPlaybackDescriptor).not.toHaveBeenCalled();
     await waitFor(() => {
@@ -312,8 +331,12 @@ function makeDescriptor(overrides: Partial<CloudPlaybackDescriptor> = {}): Cloud
 
 function makeAssetFetch(responses: Record<string, Response>): typeof fetch {
   return vi.fn(async (input: RequestInfo | URL) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    return responses[url] ?? new Response("missing test response", { status: 404, statusText: "Not Found" });
+    const url =
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    return (
+      responses[url] ??
+      new Response("missing test response", { status: 404, statusText: "Not Found" })
+    );
   }) as typeof fetch;
 }
 

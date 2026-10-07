@@ -83,7 +83,7 @@ function validateManifest(value: unknown, errors: SchemaValidationIssue[]): void
     return;
   }
   expectString(value.packageId, "manifest.packageId", errors);
-  if (value.schemaVersion !== RECORDING_SCHEMA_VERSION) {
+  if (value.schemaVersion !== RECORDING_SCHEMA_VERSION && value.schemaVersion !== "0.1.0") {
     pushIssue(errors, "manifest.schemaVersion", `unsupported schema version: ${String(value.schemaVersion)}`);
   }
   if (value.status !== "draft" && value.status !== "complete") {
@@ -111,6 +111,11 @@ function validateMeta(value: unknown, errors: SchemaValidationIssue[]): void {
   expectString(value.createdAt, "meta.createdAt", errors);
   expectNumber(value.durationMs, "meta.durationMs", errors);
   expectString(value.appVersion, "meta.appVersion", errors);
+  if (value.recordingPerspective !== undefined) expectLiteral(value.recordingPerspective, "candidate", "meta.recordingPerspective", errors);
+  if (value.documents !== undefined) {
+    if (!Array.isArray(value.documents)) pushIssue(errors, "meta.documents", "documents must be an array");
+    else value.documents.forEach((document, index) => expectOneOf(document, Array.from(LANGUAGES, (language) => `source:${language}`), `meta.documents[${index}]`, errors));
+  }
   if (value.ownerId !== null && typeof value.ownerId !== "string") {
     pushIssue(errors, "meta.ownerId", "ownerId must be string or null");
   }
@@ -171,6 +176,13 @@ function validateEventPayload(
     pushIssue(errors, path, "payload must be an object");
     return;
   }
+  if (payload.documentId !== undefined) {
+    expectOneOf(payload.documentId, Array.from(LANGUAGES, (language) => `source:${language}`), `${path}.documentId`, errors);
+  }
+  if (payload.inputDocumentsHash !== undefined) expectString(payload.inputDocumentsHash, `${path}.inputDocumentsHash`, errors);
+  if (type === "content-change" && payload.documentId !== undefined && payload.documentId !== `source:${String(payload.language)}`) {
+    pushIssue(errors, `${path}.documentId`, "documentId must match language");
+  }
   switch (type) {
     case "record-start":
       expectLanguage(payload.initialLanguage, `${path}.initialLanguage`, errors);
@@ -198,7 +210,7 @@ function validateEventPayload(
       expectNumber(payload.durationMs, `${path}.durationMs`, errors);
       break;
     case "resume-baseline":
-      if (!isPlainObject(payload.snapshot)) pushIssue(errors, `${path}.snapshot`, "snapshot must be an object");
+      validateStableState(payload.snapshot, `${path}.snapshot`, errors);
       expectLiteral(payload.reason, "paused-state-changed", `${path}.reason`, errors);
       break;
     case "content-change":
@@ -362,9 +374,38 @@ function validateSnapshot(value: unknown, index: number, errors: SchemaValidatio
   expectString(value.id, `${prefix}.id`, errors);
   expectNumber(value.timestampMs, `${prefix}.timestampMs`, errors);
   expectNumber(value.eventSeq, `${prefix}.eventSeq`, errors);
-  if (!isPlainObject(value.state)) {
-    pushIssue(errors, `${prefix}.state`, "state must be an object");
+  validateStableState(value.state, `${prefix}.state`, errors);
+}
+
+function validateStableState(value: unknown, path: string, errors: SchemaValidationIssue[]): void {
+  if (!isPlainObject(value) || !isPlainObject(value.editor) || !isPlainObject(value.runtime) || !isPlainObject(value.media)) {
+    pushIssue(errors, path, "stable state must contain editor, runtime and media"); return;
   }
+  const editor = value.editor;
+  expectString(editor.code, `${path}.editor.code`, errors);
+  expectLanguage(editor.language, `${path}.editor.language`, errors);
+  expectNumber(editor.fontSize, `${path}.editor.fontSize`, errors);
+  expectTheme(editor.theme, `${path}.editor.theme`, errors);
+  validateEditorCursor(editor.cursor, `${path}.editor.cursor`, errors);
+  validateEditorSelection(editor.selection, `${path}.editor.selection`, errors);
+  expectNumber(editor.scrollTop, `${path}.editor.scrollTop`, errors);
+  expectNumber(editor.scrollLeft, `${path}.editor.scrollLeft`, errors);
+  if (editor.documents !== undefined) validateEditorDocuments(editor.documents, `${path}.editor.documents`, errors);
+  if (editor.activeDocumentId !== undefined && editor.activeDocumentId !== `source:${String(editor.language)}`) pushIssue(errors, `${path}.editor.activeDocumentId`, "active document must match language");
+  if (editor.activeScriptLanguage !== undefined) expectOneOf(editor.activeScriptLanguage, ["javascript", "typescript"], `${path}.editor.activeScriptLanguage`, errors);
+  expectOneOf(value.runtime.status, ["idle", "running", "success", "error"], `${path}.runtime.status`, errors);
+  for (const field of ["stdout", "stderr"] as const) {
+    const output = value.runtime[field];
+    if (!Array.isArray(output) || output.some((line) => typeof line !== "string")) pushIssue(errors, `${path}.runtime.${field}`, "output must be a string array");
+  }
+  expectNullableString(value.runtime.previewHtml, `${path}.runtime.previewHtml`, errors);
+  expectNullableString(value.runtime.errorMessage, `${path}.runtime.errorMessage`, errors);
+  if (value.runtime.activeRunId !== undefined) expectString(value.runtime.activeRunId, `${path}.runtime.activeRunId`, errors);
+  if (value.runtime.inputDocumentsHash !== undefined) expectString(value.runtime.inputDocumentsHash, `${path}.runtime.inputDocumentsHash`, errors);
+  expectBoolean(value.media.microphoneEnabled, `${path}.media.microphoneEnabled`, errors);
+  expectBoolean(value.media.cameraEnabled, `${path}.media.cameraEnabled`, errors);
+  if (!isPlainObject(value.media.cameraPosition)) pushIssue(errors, `${path}.media.cameraPosition`, "camera position must be an object");
+  else { expectNumber(value.media.cameraPosition.x, `${path}.media.cameraPosition.x`, errors); expectNumber(value.media.cameraPosition.y, `${path}.media.cameraPosition.y`, errors); }
 }
 
 function validateMedia(value: unknown, errors: SchemaValidationIssue[]): void {
@@ -394,11 +435,14 @@ export function validateRecordingPackageV1(input: unknown): SchemaValidationResu
   if (!isPlainObject(input)) {
     return { ok: false, errors: [{ path: "$", message: "package must be an object" }] };
   }
-  if (input.schemaVersion !== RECORDING_SCHEMA_VERSION) {
+  if (input.schemaVersion !== RECORDING_SCHEMA_VERSION && input.schemaVersion !== "0.1.0") {
     errors.push({
       path: "schemaVersion",
       message: `unsupported schemaVersion: ${String(input.schemaVersion)}`,
     });
+  }
+  if (isPlainObject(input.manifest) && input.manifest.schemaVersion !== input.schemaVersion) {
+    pushIssue(errors, "manifest.schemaVersion", "manifest and package version must match");
   }
   validateManifest(input.manifest, errors);
   validateMeta(input.meta, errors);
@@ -435,6 +479,7 @@ export function assertEventSeqInvariants(events: RecordingEvent[]): SchemaValida
   const seen = new Set<number>();
   const errors: SchemaValidationIssue[] = [];
   let last = 0;
+  let lastTimestampMs = -Infinity;
   events.forEach((event, idx) => {
     if (seen.has(event.seq)) {
       errors.push({ path: `events[${idx}].seq`, message: `duplicate seq: ${event.seq}` });
@@ -444,6 +489,8 @@ export function assertEventSeqInvariants(events: RecordingEvent[]): SchemaValida
       errors.push({ path: `events[${idx}].seq`, message: `seq must be monotonic: ${event.seq} after ${last}` });
     }
     last = Math.max(last, event.seq);
+    if (event.timestampMs < lastTimestampMs) errors.push({ path: `events[${idx}].timestampMs`, message: "event time must not move backwards as seq increases" });
+    lastTimestampMs = event.timestampMs;
   });
   return errors.length === 0 ? { ok: true } : { ok: false, errors };
 }

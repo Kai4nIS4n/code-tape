@@ -6,9 +6,11 @@ import { SUBTITLE_LLM_CONFIG_STORAGE_KEY, loadExternalLlmConfig } from "../subti
 describe("SubtitleLlmConfigButton", () => {
   beforeEach(() => {
     window.localStorage.clear();
+    window.sessionStorage.clear();
   });
   afterEach(() => {
     window.localStorage.clear();
+    window.sessionStorage.clear();
   });
 
   it("saves a complete config and notifies the parent", () => {
@@ -56,7 +58,7 @@ describe("SubtitleLlmConfigButton", () => {
   it("shows the API key / CORS risk hint", () => {
     render(<SubtitleLlmConfigButton configured={false} onConfigChange={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "配置外部大模型" }));
-    expect(screen.getByText(/API Key 仅保存在本机浏览器/)).toBeInTheDocument();
+    expect(screen.getByText(/API Key 默认只在当前会话保存/)).toBeInTheDocument();
     expect(screen.getByText(/跨域/)).toBeInTheDocument();
   });
 });

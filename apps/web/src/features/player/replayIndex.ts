@@ -23,10 +23,12 @@ export function buildReplayIndex(pkg: RecordingPackageV1): ReplayIndex {
     if (list) list.push(event);
     else eventsByType.set(event.type, [event]);
   }
-  const snapshotsByTime = pkg.snapshots.slice().sort((a, b) => a.timestampMs - b.timestampMs);
+  const snapshotsByTime = pkg.snapshots
+    .slice()
+    .sort((a, b) => a.timestampMs - b.timestampMs || a.eventSeq - b.eventSeq);
   const stableEventsByTime = eventsBySeq
     .filter((event) => STABLE_EVENT_TYPES.has(event.type))
-    .sort((a, b) => a.timestampMs - b.timestampMs);
+    .sort((a, b) => a.timestampMs - b.timestampMs || a.seq - b.seq);
   const markersByTime = (eventsByType.get("chapter-marker") ?? []).slice();
   const activityDensity = buildReplayActivityDensity(pkg);
   return {
@@ -39,12 +41,23 @@ export function buildReplayIndex(pkg: RecordingPackageV1): ReplayIndex {
   };
 }
 
+/** Recording timestamps are monotonic by sequence; snapshots cover seq inclusively. */
+export function upperBoundEventSeq(events: readonly RecordingEvent[], seq: number): number {
+  let lo = 0;
+  let hi = events.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (events[mid].seq <= seq) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
 export function buildReplayActivityDensity(pkg: RecordingPackageV1): ActivityDensityBucket[] {
   const packagedActivityDensity = pkg.indexes?.activityDensity as unknown;
-  const activityDensity =
-    isValidPackagedActivityDensity(packagedActivityDensity)
-      ? packagedActivityDensity
-      : buildActivityDensity(pkg.events, pkg.meta.durationMs);
+  const activityDensity = isValidPackagedActivityDensity(packagedActivityDensity)
+    ? packagedActivityDensity
+    : buildActivityDensity(pkg.events, pkg.meta.durationMs);
   return normalizeActivityDensity(activityDensity);
 }
 
@@ -73,7 +86,9 @@ function isNonNegativeFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
-function normalizeActivityDensity(activityDensity: ActivityDensityBucket[]): ActivityDensityBucket[] {
+function normalizeActivityDensity(
+  activityDensity: ActivityDensityBucket[],
+): ActivityDensityBucket[] {
   return activityDensity
     .slice()
     .sort((left, right) => left.startMs - right.startMs || left.endMs - right.endMs);
@@ -101,7 +116,10 @@ export function findSnapshotAtMost(
 }
 
 /** Find the index of the last stable event whose timestamp is `<= targetMs`. -1 if none. */
-export function findStableEventIndexAtMost(stableEvents: RecordingEvent[], targetMs: number): number {
+export function findStableEventIndexAtMost(
+  stableEvents: RecordingEvent[],
+  targetMs: number,
+): number {
   let lo = 0;
   let hi = stableEvents.length - 1;
   let best = -1;

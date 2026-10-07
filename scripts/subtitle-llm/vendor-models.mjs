@@ -4,7 +4,7 @@
 // Downloads via a mirror (HF_ENDPOINT, default hf-mirror.com) because
 // huggingface.co is unreachable on the target network. Large *.onnx files are
 // generated build assets and are intentionally not tracked in Git.
-import { mkdir, writeFile, stat, open } from "node:fs/promises";
+import { mkdir, writeFile, readFile, stat, open } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 const HF_ENDPOINT = (process.env.HF_ENDPOINT ?? "https://hf-mirror.com").replace(/\/+$/, "");
@@ -93,7 +93,11 @@ async function downloadTo(url, destPath) {
 async function isValidExistingFile(path) {
   try {
     const info = await stat(path);
-    if (!info.isFile() || info.size < MIN_VALID_BYTES) return false;
+    // Some genuine generation_config / added_tokens JSON files are <200B.
+    // Keep the binary floor, validate small metadata instead of re-fetching it.
+    const minimum = path.endsWith(".onnx") ? MIN_VALID_BYTES : 1;
+    if (!info.isFile() || info.size < minimum) return false;
+    if (path.endsWith(".json")) JSON.parse(await readFile(path, "utf8"));
   } catch {
     return false;
   }

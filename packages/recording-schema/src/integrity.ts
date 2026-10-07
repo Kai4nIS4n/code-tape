@@ -19,10 +19,13 @@ export async function verifyRecordingPackageIntegrity(
   input: unknown,
   mediaBlob: Blob | null = null,
 ): Promise<PackageLoadResult> {
-  const migrated = migrateRecordingPackage(input);
-  if (!migrated.ok) return { ok: false, error: migrated.error };
-
-  const pkg = migrated.package;
+  // Verify the bytes represented by the original version before adapting any
+  // events or snapshots. Otherwise migration could hide a tampered old package.
+  const pkg = input as RecordingPackageV1;
+  if (pkg && typeof pkg === "object" && pkg.schemaVersion !== "0.1.0" && pkg.schemaVersion !== "0.2.0") {
+    const migration = migrateRecordingPackage(input);
+    if (!migration.ok) return { ok: false, error: migration.error };
+  }
   const validation = validateRecordingPackageV1(pkg);
   if (!validation.ok) return { ok: false, error: validationToLoadError(validation.errors) };
 
@@ -37,7 +40,6 @@ export async function verifyRecordingPackageIntegrity(
   }
 
   const warnings: PackageWarning[] = [];
-  const normalizedPackage = stripUnknownEvents(pkg, warnings);
   if (pkg.media) {
     if (!mediaBlob) {
       warnings.push({ code: "media-missing", blobId: pkg.media.blobId });
@@ -50,7 +52,17 @@ export async function verifyRecordingPackageIntegrity(
       }
     }
   }
-
+  const migrated = migrateRecordingPackage(input);
+  if (!migrated.ok) return { ok: false, error: migrated.error };
+  const migratedPackage = migrated.appliedMigrations.length ? {
+    ...migrated.package,
+    manifest: { ...migrated.package.manifest, checksums: {
+      ...migrated.package.manifest.checksums,
+      eventsSha256: await sha256Hex(canonicalStringify(migrated.package.events)),
+      snapshotsSha256: await sha256Hex(canonicalStringify(migrated.package.snapshots)),
+    } },
+  } : migrated.package;
+  const normalizedPackage = stripUnknownEvents(migratedPackage, warnings);
   return { ok: true, package: normalizedPackage, mediaBlob, warnings };
 }
 

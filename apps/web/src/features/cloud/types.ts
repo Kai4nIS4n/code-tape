@@ -124,6 +124,13 @@ export type CreateShareLinkResponse = {
   expiresAt: string | null;
 };
 
+export type CloudShareLink = {
+  id: string;
+  createdAt: string;
+  expiresAt: string | null;
+  revokedAt: string | null;
+};
+
 // ─────────────────────────────────────────────────────────────
 // 录制详情与列表（与后端 CloudRecordingListItem / CloudRecordingDetail 契约一致）
 // ─────────────────────────────────────────────────────────────
@@ -188,6 +195,9 @@ export type CloudPlaybackDescriptor = {
   title: string;
   durationMs: number;
   schemaVersion: RecordingSchemaVersion;
+  /** Older servers omit actual track flags; omission is unknown, not device availability. */
+  hasAudio?: boolean;
+  hasCamera?: boolean;
   manifestUrl: string;
   metaUrl: string;
   eventsUrl: string;
@@ -242,7 +252,11 @@ export type CloudRecordingRepository = {
   uploadPackage(
     pkg: RecordingPackageV1,
     blobs: { media?: Blob; thumbnail?: Blob },
-    options?: { idempotencyKey?: string; onProgress?: (progress: UploadProgress) => void; timeoutMs?: number },
+    options?: {
+      idempotencyKey?: string;
+      onProgress?: (progress: UploadProgress) => void;
+      timeoutMs?: number;
+    },
   ): Promise<CloudResult<{ recordingId: string; status: string }>>;
 
   /** 查询录制详情与当前状态（uploading/processing/ready/failed） */
@@ -269,6 +283,9 @@ export type CloudRecordingRepository = {
     input: CreateShareLinkRequest,
   ): Promise<CloudResult<CreateShareLinkResponse>>;
 
+  listShareLinks(recordingId: string): Promise<CloudResult<{ items: CloudShareLink[] }>>;
+  revokeShareLink(recordingId: string, shareId: string): Promise<CloudResult<void>>;
+
   /** 通过分享 token 获取只读播放描述，无需 owner token */
   getSharedPlaybackDescriptor(token: string): Promise<CloudResult<CloudPlaybackDescriptor>>;
 
@@ -278,6 +295,6 @@ export type CloudRecordingRepository = {
   /** 软删除当前 owner 可访问的云端录制 */
   remove(recordingId: string): Promise<CloudResult<void>>;
 
-  /** 获取当前持久化的 owner token */
+  /** @deprecated 旧接口名称，仅返回当前账号 ID，不能作为认证凭据 */
   getOwnerToken(): string;
 };

@@ -43,9 +43,10 @@
     "test:api": "npm run test -w apps/api",
     "lint:web": "npm run lint -w apps/web",
     "e2e:web": "npm run e2e -w apps/web",
-    "test": "node --test scripts/tests/*.test.mjs"
+    "test": "node --test scripts/tests/*.test.mjs",
+    "pretest": "npm run build:api"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=24"
   }
 }

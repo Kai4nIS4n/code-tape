@@ -1,0 +1,65 @@
+{
+  "experiment": "real-ui-synthetic-media-fixture",
+  "startedAt": "2026-10-07T09:50:15.777Z",
+  "completedAt": "2026-10-07T09:50:24.184Z",
+  "method": "Production CodeTape UI + native getUserMedia/MediaRecorder; Chromium synthetic default devices only; read-only IndexedDB extraction; no human media or ASR inference",
+  "privacy": {
+    "isolatedTemporaryBrowserProfile": true,
+    "realUserProfileUsed": false,
+    "physicalMicrophoneOrCameraUsed": false,
+    "syntheticDeviceFlags": [
+      "--use-fake-device-for-media-stream",
+      "--use-fake-ui-for-media-stream"
+    ]
+  },
+  "environment": {
+    "node": "v24.19.0",
+    "browser": "155.0.8059.40",
+    "webRoot": "/private/tmp/codetape-perf-after.WWi1mm",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "deviceScaleFactor": 1
+  },
+  "buildIndexSha256": "ac77edc420f4c979450a49e812107bc6c688954245b71840c4f4e7e4c182f59e",
+  "requestedRecordingDurationMs": 6000,
+  "recordingDurationMs": 6064,
+  "mediaDurationMs": 6064,
+  "timelineOffsetMs": 0,
+  "observedVideoDurationSeconds": null,
+  "note": "A null native video duration is reported honestly; MediaRecorder WebM may lack an intrinsic duration before playback. Package duration comes from the actual recording clock.",
+  "recordingId": "rec-5a9bb011-8497-43b5-894c-e2a4d5c37b97",
+  "eventCount": 28,
+  "snapshotCount": 8,
+  "mediaMimeType": "video/webm;codecs=vp9,opus",
+  "mediaBytes": 468375,
+  "mediaSha256RawBytes": "bc2df51f639b304c27243aab12892cf028d2351ecae74f7aff9d02a7eac88a2c",
+  "mediaChecksumFromOriginalManifest": "6f5d219fd76650f3214455248c0eb131cc3d9ec6421c16fd8917f6a7220beb57",
+  "recordingJsonSha256": "911762ecf2f0afd91326f621d0b4f33b15a9c143ffae1f61bb2c04647b0a1c0f",
+  "integrityValidated": true,
+  "syntheticDevices": [
+    {
+      "kind": "audioinput",
+      "label": "Fake Default Audio Input"
+    },
+    {
+      "kind": "audioinput",
+      "label": "Fake Audio Input 1"
+    },
+    {
+      "kind": "audioinput",
+      "label": "Fake Audio Input 2"
+    },
+    {
+      "kind": "videoinput",
+      "label": "fake_device_0"
+    }
+  ],
+  "blockedModelRequests": [],
+  "pageErrors": [],
+  "files": {
+    "recording": "/private/tmp/codetape-media-fixture/recording.json",
+    "media": "/private/tmp/codetape-media-fixture/media.webm"
+  }
+}

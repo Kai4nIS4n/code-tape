@@ -11,9 +11,16 @@
   },
   "dependencies": {
     "@code-tape/recording-schema": "0.0.0",
-    "ws": "^8.21.0"
+    "argon2": "^0.45.1",
+    "better-sqlite3": "^13.0.3",
+    "jose": "^6.2.12",
+    "lib0": "^0.2.119",
+    "ws": "^8.21.0",
+    "y-protocols": "^1.0.7",
+    "yjs": "^13.6.33"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^22.19.19",
     "@types/ws": "^8.18.1",
     "typescript": "^5.9.3"

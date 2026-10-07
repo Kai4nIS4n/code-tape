@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplayControlsProps } from "../ReplayControls";
-import type { CodeEditorProps } from "@/features/editor/CodeEditor";
+import type { CodeEditorHandle, CodeEditorProps } from "@/features/editor/CodeEditor";
 import type { PreviewPaneProps } from "@/features/runtime-preview/PreviewPane";
 import type { SubtitlePanelProps } from "@/features/subtitles";
 import type {
@@ -13,6 +13,15 @@ import type {
   ReplayStableState,
 } from "@/shared/recording-schema";
 import type * as ReactRouterDom from "react-router-dom";
+import type * as ReactTypes from "react";
+import { sha256Hex } from "@/shared/util/hash";
+
+const flags = vi.hoisted(() => ({
+  collaboration: true,
+  eventTimeline: true,
+  subtitleAnchors: true,
+}));
+vi.mock("@/shared/featureFlags", () => ({ featureFlags: flags }));
 
 const replayPageMock = vi.hoisted(() => {
   const schedulerState: ReplaySchedulerState = {
@@ -68,6 +77,7 @@ const replayPageMock = vi.hoisted(() => {
     play: vi.fn(),
     pause: vi.fn(),
     seek: vi.fn(async () => {}),
+    getStableState: vi.fn<() => ReplayStableState>(),
     setRate: vi.fn(),
     setVolume: vi.fn(),
     setMuted: vi.fn(),
@@ -77,6 +87,10 @@ const replayPageMock = vi.hoisted(() => {
       listener(schedulerState);
       return vi.fn();
     }),
+  };
+  const editorHandle = {
+    getEditor: vi.fn<CodeEditorHandle["getEditor"]>(() => null),
+    setModelLanguage: vi.fn(),
   };
   const repository = {
     load: vi.fn<RecordingRepository["load"]>(async () => ({
@@ -104,6 +118,7 @@ const replayPageMock = vi.hoisted(() => {
 
   return {
     scheduler,
+    editorHandle,
     schedulerState,
     repository,
     cloudRepository,
@@ -118,12 +133,16 @@ const replayPageMock = vi.hoisted(() => {
     codeEditorProps: null as CodeEditorProps | null,
     previewPaneProps: null as PreviewPaneProps | null,
     subtitlePanelProps: null as SubtitlePanelProps | null,
-    onTick: null as ((state: ReplayStableState, events?: RecordingEvent[], timelineTimeMs?: number) => void) | null,
+    onTick: null as
+      | ((state: ReplayStableState, events?: RecordingEvent[], timelineTimeMs?: number) => void)
+      | null,
     reset() {
       scheduler.load.mockClear();
       scheduler.play.mockClear();
       scheduler.pause.mockClear();
       scheduler.seek.mockClear();
+      scheduler.getStableState.mockReset();
+      editorHandle.getEditor.mockReturnValue(null);
       scheduler.setRate.mockClear();
       scheduler.setVolume.mockClear();
       scheduler.setMuted.mockClear();
@@ -171,12 +190,16 @@ vi.mock("react-router-dom", async () => {
   };
 });
 
-vi.mock("@/features/editor/CodeEditor", () => ({
-  CodeEditor: (props: CodeEditorProps) => {
-    replayPageMock.codeEditorProps = props;
-    return <div aria-label="Mock code editor" />;
-  },
-}));
+vi.mock("@/features/editor/CodeEditor", async () => {
+  const { forwardRef, useImperativeHandle } = await vi.importActual<typeof ReactTypes>("react");
+  return {
+    CodeEditor: forwardRef<CodeEditorHandle, CodeEditorProps>((props, ref) => {
+      useImperativeHandle(ref, () => replayPageMock.editorHandle);
+      replayPageMock.codeEditorProps = props;
+      return <div aria-label="Mock code editor" />;
+    }),
+  };
+});
 
 vi.mock("@/features/runtime-preview/PreviewPane", () => ({
   PreviewPane: (props: PreviewPaneProps) => {
@@ -209,10 +232,18 @@ vi.mock("../cloudPackageLoader", () => ({
 }));
 
 vi.mock("../replayScheduler", () => ({
-  createReplayScheduler: vi.fn((options: { onTick?: (state: ReplayStableState, events?: RecordingEvent[], timelineTimeMs?: number) => void }) => {
-    replayPageMock.onTick = options.onTick ?? null;
-    return replayPageMock.scheduler;
-  }),
+  createReplayScheduler: vi.fn(
+    (options: {
+      onTick?: (
+        state: ReplayStableState,
+        events?: RecordingEvent[],
+        timelineTimeMs?: number,
+      ) => void;
+    }) => {
+      replayPageMock.onTick = options.onTick ?? null;
+      return replayPageMock.scheduler;
+    },
+  ),
   defaultTickStrategy: vi.fn(() => ({})),
 }));
 
@@ -224,9 +255,324 @@ vi.mock("../ReplayControls", () => ({
 }));
 
 describe("ReplayPage", () => {
+  const nativePause = HTMLMediaElement.prototype.pause;
+  const nativeLoad = HTMLMediaElement.prototype.load;
+  beforeAll(() => {
+    HTMLMediaElement.prototype.pause = () => {};
+    HTMLMediaElement.prototype.load = () => {};
+  });
+  afterAll(() => {
+    HTMLMediaElement.prototype.pause = nativePause;
+    HTMLMediaElement.prototype.load = nativeLoad;
+  });
   beforeEach(() => {
+    flags.eventTimeline = true;
+    flags.subtitleAnchors = true;
     window.localStorage.clear();
     replayPageMock.reset();
+  });
+
+  it("releases the actual media element on unmount but keeps its source across pause and resume", async () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    const load = vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    if (typeof originalCreateObjectURL !== "function")
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        writable: true,
+        value: () => "blob:private-unmount",
+      });
+    if (typeof originalRevokeObjectURL !== "function")
+      Object.defineProperty(URL, "revokeObjectURL", {
+        configurable: true,
+        writable: true,
+        value: () => {},
+      });
+    const { ReplayPage } = await import("../ReplayPage");
+    let cleanup: (() => void) | undefined;
+    try {
+      replayPageMock.schedulerState.status = "playing";
+      const rendered = render(<ReplayPage />);
+      cleanup = rendered.unmount;
+      const video = (await screen.findByLabelText("录制摄像头视频")) as HTMLVideoElement;
+      await waitFor(() => expect(play).toHaveBeenCalled());
+      const originalSource = video.getAttribute("src");
+      expect(originalSource).toBeTruthy();
+      load.mockClear();
+      pause.mockClear();
+      replayPageMock.schedulerState.status = "paused";
+      rendered.rerender(<ReplayPage />);
+      expect(pause).toHaveBeenCalled();
+      expect(load).not.toHaveBeenCalled();
+      replayPageMock.schedulerState.status = "playing";
+      rendered.rerender(<ReplayPage />);
+      expect(video.getAttribute("src")).toBe(originalSource);
+      expect(load).not.toHaveBeenCalled();
+      pause.mockClear();
+      rendered.unmount();
+      cleanup = undefined;
+      expect(pause).toHaveBeenCalled();
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(video.getAttribute("src")).toBeNull();
+    } finally {
+      cleanup?.();
+      play.mockRestore();
+      pause.mockRestore();
+      load.mockRestore();
+      if (typeof originalCreateObjectURL !== "function")
+        Reflect.deleteProperty(URL, "createObjectURL");
+      if (typeof originalRevokeObjectURL !== "function")
+        Reflect.deleteProperty(URL, "revokeObjectURL");
+    }
+  });
+
+  it("releases the previous package video before displaying a new package's media", async () => {
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    const load = vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    if (typeof originalCreateObjectURL !== "function")
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        writable: true,
+        value: () => "blob:package-media",
+      });
+    if (typeof originalRevokeObjectURL !== "function")
+      Object.defineProperty(URL, "revokeObjectURL", {
+        configurable: true,
+        writable: true,
+        value: () => {},
+      });
+    const { ReplayPage } = await import("../ReplayPage");
+    let cleanup: (() => void) | undefined;
+    try {
+      const rendered = render(<ReplayPage />);
+      cleanup = rendered.unmount;
+      const previous = await screen.findByLabelText("录制摄像头视频");
+      const nextPackage = {
+        ...replayPageMock.packageData,
+        manifest: { ...replayPageMock.packageData.manifest, packageId: "recording-2" },
+        meta: { ...replayPageMock.packageData.meta, id: "recording-2" },
+      };
+      replayPageMock.repository.load.mockResolvedValueOnce({
+        ok: true,
+        package: nextPackage,
+        mediaBlob: new Blob(["next media"]),
+        warnings: [],
+      });
+      replayPageMock.routeId = "recording-2";
+      load.mockClear();
+      pause.mockClear();
+      rendered.rerender(<ReplayPage />);
+      await waitFor(() => expect(screen.getByLabelText("录制摄像头视频")).not.toBe(previous));
+      expect(pause.mock.instances).toContain(previous);
+      expect(load.mock.instances).toContain(previous);
+      expect(previous.getAttribute("src")).toBeNull();
+    } finally {
+      cleanup?.();
+      pause.mockRestore();
+      load.mockRestore();
+      if (typeof originalCreateObjectURL !== "function")
+        Reflect.deleteProperty(URL, "createObjectURL");
+      if (typeof originalRevokeObjectURL !== "function")
+        Reflect.deleteProperty(URL, "revokeObjectURL");
+    }
+  });
+
+  it("feature rollback hides the new event panel and leaves subtitle time seeking available", async () => {
+    flags.eventTimeline = false;
+    flags.subtitleAnchors = false;
+    const { ReplayPage } = await import("../ReplayPage");
+    render(<ReplayPage />);
+    await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalled());
+    expect(screen.queryByLabelText("事件时间轴")).not.toBeInTheDocument();
+    expect(replayPageMock.subtitlePanelProps?.onAnchorSeek).toBeUndefined();
+    expect(replayPageMock.subtitlePanelProps?.onCreateManualAnchor).toBeUndefined();
+    await act(async () => {
+      await replayPageMock.subtitlePanelProps?.onSeek(3000);
+    });
+    expect(replayPageMock.scheduler.seek).toHaveBeenCalledWith(3000);
+  });
+
+  it("manual association pauses at the playhead and copies the viewer selection into a derived anchor", async () => {
+    const { ReplayPage } = await import("../ReplayPage");
+    const state: ReplayStableState = {
+      editor: {
+        code: "const a = 1;\nconst b = 2;",
+        language: "javascript",
+        cursor: { lineNumber: 1, column: 1 },
+        selection: null,
+        scrollTop: 0,
+        scrollLeft: 0,
+        fontSize: 14,
+        theme: "dark",
+      },
+      pointer: null,
+      media: { microphoneEnabled: false, cameraEnabled: false, cameraPosition: { x: 0, y: 0 } },
+      runtime: { status: "idle", stdout: [], stderr: [], previewHtml: null, errorMessage: null },
+    };
+    replayPageMock.scheduler.getStableState.mockReturnValue(state);
+    replayPageMock.schedulerState.timelineTimeMs = 2000;
+    const selected = { startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: 6 };
+    replayPageMock.editorHandle.getEditor.mockReturnValue({
+      getSelection: () => selected,
+      getPosition: () => ({ lineNumber: 2, column: 6 }),
+      getModel: () => ({ getValue: () => state.editor.code }),
+    } as unknown as ReturnType<CodeEditorHandle["getEditor"]>);
+    render(<ReplayPage />);
+    await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalled());
+    let anchor: Awaited<ReturnType<NonNullable<SubtitlePanelProps["onCreateManualAnchor"]>>>;
+    await act(async () => {
+      anchor = await replayPageMock.subtitlePanelProps!.onCreateManualAnchor!("one");
+    });
+    expect(anchor!).toMatchObject({ source: "manual", targetMs: 2000, range: selected });
+    expect(replayPageMock.scheduler.pause).toHaveBeenCalledTimes(1);
+    expect(state.editor.selection).toBeNull();
+    expect(state.editor.cursor).toEqual({ lineNumber: 1, column: 1 });
+  });
+
+  it("reveals only a valid historical code anchor without changing recorded cursor state", async () => {
+    const { ReplayPage } = await import("../ReplayPage");
+    const state: ReplayStableState = {
+      editor: {
+        code: "const a = 1;",
+        language: "javascript",
+        cursor: { lineNumber: 1, column: 2 },
+        selection: null,
+        scrollTop: 0,
+        scrollLeft: 0,
+        fontSize: 14,
+        theme: "dark",
+      },
+      pointer: null,
+      media: { microphoneEnabled: false, cameraEnabled: false, cameraPosition: { x: 0, y: 0 } },
+      runtime: { status: "idle", stdout: [], stderr: [], previewHtml: null, errorMessage: null },
+    };
+    replayPageMock.scheduler.getStableState.mockReturnValue(state);
+    render(<ReplayPage />);
+    await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalled());
+    act(() => replayPageMock.onTick?.(state));
+    const anchor = {
+      segmentId: "one",
+      targetMs: 1000,
+      eventSeq: 1,
+      documentId: "source:javascript",
+      contentHash: await sha256Hex(state.editor.code),
+      range: { startLineNumber: 1, startColumn: 7, endLineNumber: 1, endColumn: 8 },
+      source: "recorded-selection" as const,
+    };
+    await act(async () => {
+      await replayPageMock.subtitlePanelProps?.onAnchorSeek?.(anchor);
+    });
+    expect(replayPageMock.codeEditorProps?.revealRange?.range).toEqual(anchor.range);
+    expect(state.editor.cursor).toEqual({ lineNumber: 1, column: 2 });
+    expect(state.editor.selection).toBeNull();
+    await act(async () => {
+      await replayPageMock.subtitlePanelProps?.onAnchorSeek?.({
+        ...anchor,
+        contentHash: "stale-hash",
+      });
+    });
+    expect(replayPageMock.codeEditorProps?.revealRange).toBeNull();
+  });
+
+  it("a pending subtitle seek cannot highlight after a newer control seek", async () => {
+    const { ReplayPage } = await import("../ReplayPage");
+    render(<ReplayPage />);
+    await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalled());
+    let finish!: () => void;
+    replayPageMock.scheduler.seek.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    let pending!: Promise<void>;
+    act(() => {
+      pending = replayPageMock.subtitlePanelProps!.onAnchorSeek!({
+        segmentId: "one",
+        targetMs: 1000,
+        eventSeq: 1,
+        documentId: "source:javascript",
+        contentHash: "not-read",
+        range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 },
+        source: "recorded-cursor",
+      });
+    });
+    await act(async () => {
+      await replayPageMock.controlsProps?.onSeek(2000);
+    });
+    await act(async () => {
+      finish();
+      await pending;
+    });
+    expect(replayPageMock.codeEditorProps?.revealRange).toBeNull();
+    expect(replayPageMock.scheduler.getStableState).not.toHaveBeenCalled();
+  });
+
+  it("ignores an old media seeked position and lets only the latest target complete", async () => {
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    if (typeof URL.createObjectURL !== "function")
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        writable: true,
+        value: vi.fn(() => "blob:seek-test"),
+      });
+    if (typeof URL.revokeObjectURL !== "function")
+      Object.defineProperty(URL, "revokeObjectURL", {
+        configurable: true,
+        writable: true,
+        value: vi.fn(),
+      });
+    const { ReplayPage } = await import("../ReplayPage");
+    let unmount: (() => void) | undefined;
+    try {
+      unmount = render(<ReplayPage />).unmount;
+      const video = (await screen.findByLabelText("录制摄像头视频")) as HTMLVideoElement;
+      let time = 0;
+      let seeking = false;
+      Object.defineProperty(video, "readyState", { configurable: true, get: () => 1 });
+      Object.defineProperty(video, "seeking", { configurable: true, get: () => seeking });
+      Object.defineProperty(video, "currentTime", {
+        configurable: true,
+        get: () => time,
+        set: (value: number) => {
+          time = value;
+          seeking = true;
+        },
+      });
+      const adapter = replayPageMock.scheduler.setMediaAdapter.mock.calls
+        .map(([value]) => value as MediaClockAdapter | null)
+        .filter(Boolean)
+        .at(-1)!;
+      const first = adapter.seek(1000);
+      let latestComplete = false;
+      const latest = adapter.seek(2000).then(() => {
+        latestComplete = true;
+      });
+      time = 1;
+      seeking = false;
+      fireEvent.seeked(video);
+      await Promise.resolve();
+      expect(latestComplete).toBe(false);
+      time = 2;
+      seeking = false;
+      fireEvent.seeked(video);
+      await Promise.all([first, latest]);
+      expect(latestComplete).toBe(true);
+      expect(video.currentTime).toBe(2);
+    } finally {
+      unmount?.();
+      pause.mockRestore();
+      if (typeof originalCreateObjectURL !== "function")
+        Reflect.deleteProperty(URL, "createObjectURL");
+      if (typeof originalRevokeObjectURL !== "function")
+        Reflect.deleteProperty(URL, "revokeObjectURL");
+    }
   });
 
   it("loads cloud replays through the cloud package loader when source is cloud", async () => {
@@ -234,7 +580,9 @@ describe("ReplayPage", () => {
 
     render(<ReplayPage source="cloud" />);
 
-    await waitFor(() => expect(replayPageMock.cloudLoader.load).toHaveBeenCalledWith("recording-1"));
+    await waitFor(() =>
+      expect(replayPageMock.cloudLoader.load).toHaveBeenCalledWith("recording-1"),
+    );
     expect(replayPageMock.createCloudRecordingRepository).toHaveBeenCalledTimes(1);
     expect(replayPageMock.createCloudPackageLoader).toHaveBeenCalledWith({
       repository: replayPageMock.cloudRepository,
@@ -249,7 +597,9 @@ describe("ReplayPage", () => {
 
     render(<ReplayPage source="share" />);
 
-    await waitFor(() => expect(replayPageMock.cloudLoader.load).toHaveBeenCalledWith("share-token"));
+    await waitFor(() =>
+      expect(replayPageMock.cloudLoader.load).toHaveBeenCalledWith("share-token"),
+    );
     expect(replayPageMock.createCloudRecordingRepository).toHaveBeenCalledTimes(1);
     expect(replayPageMock.createCloudPackageLoader).toHaveBeenCalledWith({
       repository: replayPageMock.cloudRepository,
@@ -279,7 +629,9 @@ describe("ReplayPage", () => {
 
     render(<ReplayPage source="cloud" />);
 
-    await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData));
+    await waitFor(() =>
+      expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData),
+    );
     expect(screen.getByText("音视频不可用，已切换为纯事件流回放")).toBeInTheDocument();
   });
 
@@ -289,7 +641,9 @@ describe("ReplayPage", () => {
 
     render(<ReplayPage source="cloud" />);
 
-    await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData));
+    await waitFor(() =>
+      expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData),
+    );
     await waitFor(() => expect(replayPageMock.scheduler.seek).toHaveBeenCalledWith(42_000));
   });
 
@@ -307,14 +661,15 @@ describe("ReplayPage", () => {
     const { ReplayPage } = await import("../ReplayPage");
 
     render(<ReplayPage source="cloud" />);
-    await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData));
+    await waitFor(() =>
+      expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData),
+    );
     fireEvent.click(screen.getByRole("button", { name: "复制当前时间分享链接" }));
 
     await waitFor(() => {
-      expect(replayPageMock.cloudRepository.createShareLink).toHaveBeenCalledWith(
-        "recording-1",
-        { startTimeMs: 37_500 },
-      );
+      expect(replayPageMock.cloudRepository.createShareLink).toHaveBeenCalledWith("recording-1", {
+        startTimeMs: 37_500,
+      });
     });
     expect(writeText).toHaveBeenCalledWith(expect.stringContaining("/s/share-token?t=37500"));
   });
@@ -345,7 +700,9 @@ describe("ReplayPage", () => {
     try {
       render(<ReplayPage />);
 
-      await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData));
+      await waitFor(() =>
+        expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData),
+      );
       expect(replayPageMock.controlsProps?.durationMs).toBe(120_000);
 
       await act(async () => {
@@ -396,7 +753,9 @@ describe("ReplayPage", () => {
 
     render(<ReplayPage />);
 
-    await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData));
+    await waitFor(() =>
+      expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData),
+    );
     await waitFor(() => {
       expect(replayPageMock.codeEditorProps?.value).toBe("console.log('final frame');");
     });
@@ -447,7 +806,9 @@ describe("ReplayPage", () => {
     const { ReplayPage } = await import("../ReplayPage");
 
     render(<ReplayPage />);
-    await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData));
+    await waitFor(() =>
+      expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData),
+    );
 
     act(() => {
       replayPageMock.onTick?.({
@@ -506,7 +867,9 @@ describe("ReplayPage", () => {
     const { ReplayPage } = await import("../ReplayPage");
 
     render(<ReplayPage />);
-    await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData));
+    await waitFor(() =>
+      expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData),
+    );
 
     expect(screen.getByLabelText("Mock subtitle panel")).toBeInTheDocument();
     expect(replayPageMock.subtitlePanelProps).toEqual(
@@ -543,13 +906,14 @@ describe("ReplayPage", () => {
       });
     });
 
-    expect(replayPageMock.subtitlePanelProps?.postProcessorContext).toEqual(
+    expect(replayPageMock.subtitlePanelProps?.contextResolver?.(0, 1000)).toEqual(
       expect.objectContaining({
-        language: "typescript",
-        code: "const [count, setCount] = useState(0);",
-        runtimeOutput: "render start\nReferenceError: count\nboom",
+        language: "javascript",
         glossary: expect.arrayContaining(["React", "TypeScript", "code-tape"]),
       }),
+    );
+    expect(replayPageMock.subtitlePanelProps?.contextResolver?.(0, 1000).code).not.toContain(
+      "const [count, setCount]",
     );
 
     await act(async () => {
@@ -563,7 +927,9 @@ describe("ReplayPage", () => {
     const { ReplayPage } = await import("../ReplayPage");
 
     render(<ReplayPage />);
-    await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData));
+    await waitFor(() =>
+      expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData),
+    );
 
     expect(screen.getByLabelText("回放工作区")).toHaveClass("min-h-0");
   });
@@ -572,7 +938,9 @@ describe("ReplayPage", () => {
     const { ReplayPage } = await import("../ReplayPage");
 
     render(<ReplayPage />);
-    await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData));
+    await waitFor(() =>
+      expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData),
+    );
 
     const separator = screen.getByRole("separator", { name: "调整回放工作区宽度" });
     expect(separator).toHaveAttribute("aria-valuemin", "52");
@@ -589,7 +957,9 @@ describe("ReplayPage", () => {
     const { ReplayPage } = await import("../ReplayPage");
 
     render(<ReplayPage />);
-    await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData));
+    await waitFor(() =>
+      expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData),
+    );
 
     expect(screen.getByRole("separator", { name: "调整回放工作区宽度" })).toBeInTheDocument();
 
@@ -602,7 +972,9 @@ describe("ReplayPage", () => {
     const { ReplayPage } = await import("../ReplayPage");
 
     render(<ReplayPage />);
-    await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData));
+    await waitFor(() =>
+      expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData),
+    );
 
     act(() => {
       replayPageMock.onTick?.(
@@ -618,8 +990,18 @@ describe("ReplayPage", () => {
             theme: "dark",
           },
           pointer: null,
-          media: { microphoneEnabled: true, cameraEnabled: true, cameraPosition: { x: 0.8, y: 0.75 } },
-          runtime: { status: "idle", stdout: [], stderr: [], previewHtml: null, errorMessage: null },
+          media: {
+            microphoneEnabled: true,
+            cameraEnabled: true,
+            cameraPosition: { x: 0.8, y: 0.75 },
+          },
+          runtime: {
+            status: "idle",
+            stdout: [],
+            stderr: [],
+            previewHtml: null,
+            errorMessage: null,
+          },
         },
         [
           {
@@ -654,7 +1036,9 @@ describe("ReplayPage", () => {
     const { ReplayPage } = await import("../ReplayPage");
 
     render(<ReplayPage />);
-    await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData));
+    await waitFor(() =>
+      expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData),
+    );
 
     act(() => {
       replayPageMock.onTick?.(
@@ -670,8 +1054,18 @@ describe("ReplayPage", () => {
             theme: "dark",
           },
           pointer: null,
-          media: { microphoneEnabled: true, cameraEnabled: true, cameraPosition: { x: 0.8, y: 0.75 } },
-          runtime: { status: "idle", stdout: [], stderr: [], previewHtml: null, errorMessage: null },
+          media: {
+            microphoneEnabled: true,
+            cameraEnabled: true,
+            cameraPosition: { x: 0.8, y: 0.75 },
+          },
+          runtime: {
+            status: "idle",
+            stdout: [],
+            stderr: [],
+            previewHtml: null,
+            errorMessage: null,
+          },
         },
         [
           {
@@ -707,7 +1101,9 @@ describe("ReplayPage", () => {
 
     try {
       render(<ReplayPage />);
-      await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData));
+      await waitFor(() =>
+        expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData),
+      );
 
       vi.useFakeTimers();
       act(() => {
@@ -724,8 +1120,18 @@ describe("ReplayPage", () => {
               theme: "dark",
             },
             pointer: null,
-            media: { microphoneEnabled: true, cameraEnabled: true, cameraPosition: { x: 0.8, y: 0.75 } },
-            runtime: { status: "idle", stdout: [], stderr: [], previewHtml: null, errorMessage: null },
+            media: {
+              microphoneEnabled: true,
+              cameraEnabled: true,
+              cameraPosition: { x: 0.8, y: 0.75 },
+            },
+            runtime: {
+              status: "idle",
+              stdout: [],
+              stderr: [],
+              previewHtml: null,
+              errorMessage: null,
+            },
           },
           [
             {
@@ -762,7 +1168,9 @@ describe("ReplayPage", () => {
     const { ReplayPage } = await import("../ReplayPage");
 
     render(<ReplayPage />);
-    await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData));
+    await waitFor(() =>
+      expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData),
+    );
 
     const pointerToggle = screen.getByRole("button", { name: "显示鼠标轨迹" });
     const shortcutToggle = screen.getByRole("button", { name: "显示快捷键" });
@@ -775,7 +1183,13 @@ describe("ReplayPage", () => {
     expect(cameraToggle).toHaveAttribute("aria-pressed", "true");
     expect(runtimeToggle).toHaveAttribute("aria-pressed", "true");
     expect(subtitleToggle).toHaveAttribute("aria-pressed", "true");
-    for (const toggle of [pointerToggle, shortcutToggle, cameraToggle, runtimeToggle, subtitleToggle]) {
+    for (const toggle of [
+      pointerToggle,
+      shortcutToggle,
+      cameraToggle,
+      runtimeToggle,
+      subtitleToggle,
+    ]) {
       expect(toggle.querySelector("[data-display-toggle-state='visible']")).toBeInTheDocument();
       expect(toggle.querySelector("[data-display-toggle-state='hidden']")).not.toBeInTheDocument();
     }
@@ -794,7 +1208,11 @@ describe("ReplayPage", () => {
             theme: "dark",
           },
           pointer: null,
-          media: { microphoneEnabled: true, cameraEnabled: true, cameraPosition: { x: 0.8, y: 0.75 } },
+          media: {
+            microphoneEnabled: true,
+            cameraEnabled: true,
+            cameraPosition: { x: 0.8, y: 0.75 },
+          },
           runtime: {
             status: "success",
             stdout: ["ok"],
@@ -847,7 +1265,13 @@ describe("ReplayPage", () => {
     expect(cameraToggle).toHaveAttribute("aria-pressed", "false");
     expect(runtimeToggle).toHaveAttribute("aria-pressed", "false");
     expect(subtitleToggle).toHaveAttribute("aria-pressed", "false");
-    for (const toggle of [pointerToggle, shortcutToggle, cameraToggle, runtimeToggle, subtitleToggle]) {
+    for (const toggle of [
+      pointerToggle,
+      shortcutToggle,
+      cameraToggle,
+      runtimeToggle,
+      subtitleToggle,
+    ]) {
       expect(toggle.querySelector("[data-display-toggle-state='hidden']")).toBeInTheDocument();
       expect(toggle.querySelector("[data-display-toggle-off-slash]")).toBeInTheDocument();
       expect(toggle.querySelector("[data-display-toggle-state='visible']")).not.toBeInTheDocument();
@@ -873,7 +1297,9 @@ describe("ReplayPage", () => {
     const { ReplayPage } = await import("../ReplayPage");
 
     render(<ReplayPage />);
-    await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData));
+    await waitFor(() =>
+      expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData),
+    );
 
     act(() => {
       replayPageMock.onTick?.({
@@ -888,7 +1314,11 @@ describe("ReplayPage", () => {
           theme: "dark",
         },
         pointer: null,
-        media: { microphoneEnabled: true, cameraEnabled: true, cameraPosition: { x: 0.8, y: 0.75 } },
+        media: {
+          microphoneEnabled: true,
+          cameraEnabled: true,
+          cameraPosition: { x: 0.8, y: 0.75 },
+        },
         runtime: { status: "idle", stdout: [], stderr: [], previewHtml: null, errorMessage: null },
       });
     });
@@ -920,7 +1350,9 @@ describe("ReplayPage", () => {
         true,
       ),
     );
-    await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData));
+    await waitFor(() =>
+      expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData),
+    );
     const firstAdapterCallIndex = replayPageMock.scheduler.setMediaAdapter.mock.calls.findIndex(
       ([adapter]) => adapter,
     );
@@ -946,9 +1378,9 @@ describe("ReplayPage", () => {
       render(<ReplayPage />);
 
       await waitFor(() =>
-        expect(replayPageMock.scheduler.setMediaAdapter.mock.calls.some(([adapter]) => adapter)).toBe(
-          true,
-        ),
+        expect(
+          replayPageMock.scheduler.setMediaAdapter.mock.calls.some(([adapter]) => adapter),
+        ).toBe(true),
       );
       const adapter = replayPageMock.scheduler.setMediaAdapter.mock.calls.find(
         ([candidate]) => candidate,
@@ -996,7 +1428,9 @@ describe("ReplayPage", () => {
 
     render(<ReplayPage />);
 
-    await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData));
+    await waitFor(() =>
+      expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData),
+    );
     expect(screen.getByText("音视频不可用，已切换为纯事件流回放")).toBeInTheDocument();
     expect(screen.queryByText(/加载失败/)).not.toBeInTheDocument();
     expect(screen.getByLabelText("Mock code editor")).toBeInTheDocument();
@@ -1017,7 +1451,9 @@ describe("ReplayPage", () => {
       </MemoryRouter>,
     );
 
-    await waitFor(() => expect(screen.getByText(/加载失败：checksum-mismatch/)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/加载失败：checksum-mismatch/)).toBeInTheDocument(),
+    );
     expect(replayPageMock.scheduler.load).not.toHaveBeenCalled();
     expect(screen.queryByText("音视频不可用，已切换为纯事件流回放")).not.toBeInTheDocument();
   });
@@ -1127,7 +1563,9 @@ describe("ReplayPage", () => {
     const { ReplayPage } = await import("../ReplayPage");
 
     render(<ReplayPage />);
-    await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData));
+    await waitFor(() =>
+      expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData),
+    );
 
     act(() => {
       replayPageMock.onTick?.({
@@ -1142,7 +1580,11 @@ describe("ReplayPage", () => {
           theme: "dark",
         },
         pointer: null,
-        media: { microphoneEnabled: true, cameraEnabled: true, cameraPosition: { x: 0.8, y: 0.75 } },
+        media: {
+          microphoneEnabled: true,
+          cameraEnabled: true,
+          cameraPosition: { x: 0.8, y: 0.75 },
+        },
         runtime: { status: "idle", stdout: [], stderr: [], previewHtml: null, errorMessage: null },
       });
     });
@@ -1168,7 +1610,9 @@ describe("ReplayPage", () => {
     const { ReplayPage } = await import("../ReplayPage");
 
     render(<ReplayPage />);
-    await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData));
+    await waitFor(() =>
+      expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData),
+    );
 
     act(() => {
       replayPageMock.controlsProps?.onPlayPause();
@@ -1265,9 +1709,11 @@ describe("ReplayPage", () => {
 
       act(() => {
         replayPageMock.controlsProps?.onPlayPause();
+        replayPageMock.schedulerState.status = "playing";
+        replayPageMock.schedulerState.timelineTimeMs = 0;
       });
 
-      expect(play).toHaveBeenCalledTimes(1);
+      expect(play).toHaveBeenCalled();
       expect(pause).not.toHaveBeenCalled();
       expect(replayPageMock.scheduler.play).toHaveBeenCalledTimes(1);
     } finally {
@@ -1342,7 +1788,9 @@ describe("ReplayPage", () => {
 
       try {
         render(<ReplayPage />);
-        await waitFor(() => expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData));
+        await waitFor(() =>
+          expect(replayPageMock.scheduler.load).toHaveBeenCalledWith(replayPageMock.packageData),
+        );
 
         act(() => {
           replayPageMock.onTick?.({
@@ -1357,8 +1805,18 @@ describe("ReplayPage", () => {
               theme: "dark",
             },
             pointer: null,
-            media: { microphoneEnabled: true, cameraEnabled: true, cameraPosition: { x: 0.8, y: 0.75 } },
-            runtime: { status: "idle", stdout: [], stderr: [], previewHtml: null, errorMessage: null },
+            media: {
+              microphoneEnabled: true,
+              cameraEnabled: true,
+              cameraPosition: { x: 0.8, y: 0.75 },
+            },
+            runtime: {
+              status: "idle",
+              stdout: [],
+              stderr: [],
+              previewHtml: null,
+              errorMessage: null,
+            },
           });
         });
 

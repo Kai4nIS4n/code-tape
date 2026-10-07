@@ -307,7 +307,7 @@ export function createRecordingStore(options: RecordingStoreOptions = {}): Recor
         return { ok: false, error: { code: "incomplete-package", packageId: stored.manifest.packageId } };
       }
       const pkg: RecordingPackageV1 = {
-        schemaVersion: RECORDING_SCHEMA_VERSION,
+        schemaVersion: stored.manifest.schemaVersion,
         manifest: stored.manifest,
         meta: stored.meta,
         events: stored.events,
@@ -356,7 +356,7 @@ export function createRecordingStore(options: RecordingStoreOptions = {}): Recor
         : null;
       return buildRecordingZip(
         {
-          schemaVersion: RECORDING_SCHEMA_VERSION,
+          schemaVersion: stored.manifest.schemaVersion,
           manifest: stored.manifest,
           meta: stored.meta,
           events: stored.events,
@@ -415,7 +415,7 @@ export function createRecordingStore(options: RecordingStoreOptions = {}): Recor
             : null);
         const integrity = await verifyRecordingPackageIntegrity(
           {
-            schemaVersion: RECORDING_SCHEMA_VERSION,
+            schemaVersion: manifest.schemaVersion,
             manifest,
             meta,
             events,
@@ -434,7 +434,13 @@ export function createRecordingStore(options: RecordingStoreOptions = {}): Recor
               : integrity.error.code,
           };
         }
-        const saved = await this.saveDraft({ meta, events, snapshots, indexes, mediaBlob });
+        const saved = await this.saveDraft({
+          meta: integrity.package.meta,
+          events: integrity.package.events,
+          snapshots: integrity.package.snapshots,
+          indexes: integrity.package.indexes ?? emptyIndexes(),
+          mediaBlob,
+        });
         if (!saved.ok) return saved;
         const committed = await this.commit(saved.recordingId);
         if (!committed.ok) return committed;

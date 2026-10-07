@@ -2,7 +2,7 @@ import type {
   SubtitleCorrectionResult,
   SubtitlePostProcessor,
   SubtitlePostProcessorContext,
-  SubtitleTrack,
+  SubtitlePostProcessorInput,
 } from "./types";
 import { DEFAULT_POSTPROCESSOR_MODEL } from "./subtitlePostProcessorConfig";
 import { loadTransformersPipeline } from "./transformersLoader";
@@ -37,7 +37,7 @@ type TextGenerationPipelineOptions = {
   dtype: "q4" | "q4f16" | "q8";
 };
 
-type TextGenerationPipeline = (
+type TextGenerationPipeline = ((
   prompt: string | SubtitlePostProcessorMessage[],
   options: {
     max_new_tokens: number;
@@ -46,7 +46,12 @@ type TextGenerationPipeline = (
     return_full_text: boolean;
     chat_template?: string;
   },
-) => Promise<unknown>;
+) => Promise<unknown>) & {
+  tokenizer?: ((text: string) => {
+    input_ids: { dims?: number[]; data?: ArrayLike<number | bigint> } | number[][] | number[];
+  }) & { encode?: (text: string) => number[] };
+  model?: { config?: { max_position_embeddings?: number } };
+};
 
 type PipelineFactory = (
   task: "text-generation",
@@ -69,9 +74,7 @@ export function createHuggingFaceSubtitlePostProcessor(
 ): SubtitlePostProcessor {
   const model = options.model ?? DEFAULT_POSTPROCESSOR_MODEL;
   // Keep the cold-start path to the single validated browser target; final load errors are wrapped below.
-  const pipelineOptions: TextGenerationPipelineOptions[] = [
-    DEFAULT_POSTPROCESSOR_RUNTIME_CONFIG,
-  ];
+  const pipelineOptions: TextGenerationPipelineOptions[] = [DEFAULT_POSTPROCESSOR_RUNTIME_CONFIG];
   let pipelinePromise: Promise<TextGenerationPipeline> | null = null;
   const getPipeline = () => {
     if (!pipelinePromise) {
@@ -95,7 +98,11 @@ export function createHuggingFaceSubtitlePostProcessor(
       if (input.signal?.aborted) throw new DOMException("字幕纠错已取消", "AbortError");
       const pipeline = await getPipeline();
       if (input.signal?.aborted) throw new DOMException("字幕纠错已取消", "AbortError");
-      return processSubtitleTrack({ input, model, pipeline });
+      return processSubtitleTrack({
+        input: { ...input, strictValidation: input.strictValidation ?? true },
+        model,
+        pipeline,
+      });
     },
   };
 }
@@ -105,11 +112,7 @@ async function processSubtitleTrack({
   model,
   pipeline,
 }: {
-  input: {
-    track: SubtitleTrack;
-    context?: SubtitlePostProcessorContext;
-    signal?: AbortSignal;
-  };
+  input: SubtitlePostProcessorInput;
   model: string;
   pipeline: TextGenerationPipeline;
 }): Promise<SubtitleCorrectionResult> {
@@ -128,9 +131,11 @@ async function processSubtitleTrack({
     });
     merged.segments.push(...result.segments);
     merged.chapters?.push(...(result.chapters ?? []));
+    if (result.validationWarnings?.length)
+      (merged.validationWarnings ??= []).push(...result.validationWarnings);
   }
   if (input.signal?.aborted) throw new DOMException("字幕纠错已取消", "AbortError");
-  return constrainCorrectionToTrack(merged, input.track);
+  return constrainCorrectionToTrack(merged, input.track, input.strictValidation);
 }
 
 async function processSubtitleTrackChunk({
@@ -138,16 +143,33 @@ async function processSubtitleTrackChunk({
   model,
   pipeline,
 }: {
-  input: {
-    track: SubtitleTrack;
-    context?: SubtitlePostProcessorContext;
-    signal?: AbortSignal;
-  };
+  input: SubtitlePostProcessorInput;
   model: string;
   pipeline: TextGenerationPipeline;
 }): Promise<SubtitleCorrectionResult> {
   const maxNewTokens = estimateMaxNewTokens(input.track);
-  const output = await pipeline(buildSubtitlePostProcessorMessages(input), {
+  const budgetedInput = input.strictValidation
+    ? fitContextToTokenizer(input, pipeline, maxNewTokens)
+    : input;
+  if (!budgetedInput) {
+    if (input.track.segments.length <= 1)
+      throw new Error("字幕段超出模型输入预算，请缩短该段字幕后重试。");
+    const split = chunkSubtitleTrack(input.track, Math.ceil(input.track.segments.length / 2));
+    const merged: SubtitleCorrectionResult = { segments: [], chapters: [] };
+    for (const track of split) {
+      const result = await processSubtitleTrackChunk({
+        input: { ...input, track },
+        model,
+        pipeline,
+      });
+      merged.segments.push(...result.segments);
+      merged.chapters?.push(...(result.chapters ?? []));
+      if (result.validationWarnings?.length)
+        (merged.validationWarnings ??= []).push(...result.validationWarnings);
+    }
+    return merged;
+  }
+  const output = await pipeline(buildSubtitlePostProcessorMessages(budgetedInput), {
     max_new_tokens: maxNewTokens,
     do_sample: false,
     repetition_penalty: 1.05,
@@ -158,35 +180,99 @@ async function processSubtitleTrackChunk({
   const generatedText = readGeneratedText(output);
   try {
     return constrainCorrectionToTrack(
-      extractSubtitleCorrectionResult(generatedText),
+      extractSubtitleCorrectionResult(generatedText, input.strictValidation),
       input.track,
+      input.strictValidation,
     );
   } catch (error) {
     if (!isRecoverableJsonOutputError(error)) throw error;
-    const recovered = recoverSubtitleCorrectionResult(generatedText, input.track);
+    const recovered = input.strictValidation
+      ? null
+      : recoverSubtitleCorrectionResult(generatedText, input.track);
     if (recovered) return recovered;
   }
   if (input.signal?.aborted) throw new DOMException("字幕纠错已取消", "AbortError");
-  const retryOutput = await pipeline(buildSubtitlePostProcessorMessages(input, { previousOutput: generatedText }), {
-    max_new_tokens: maxNewTokens,
-    do_sample: false,
-    repetition_penalty: 1.05,
-    return_full_text: false,
-    ...buildChatTemplateOption(model),
+  const retryMessages = buildSubtitlePostProcessorMessages(budgetedInput, {
+    previousOutput: generatedText,
   });
+  // Repair context also consumes tokens; fall back to the original prompt if
+  // adding an excerpt would exceed the same model window.
+  const retryOutput = await pipeline(
+    fitsTokenizer(retryMessages, pipeline, maxNewTokens)
+      ? retryMessages
+      : buildSubtitlePostProcessorMessages(budgetedInput),
+    {
+      max_new_tokens: maxNewTokens,
+      do_sample: false,
+      repetition_penalty: 1.05,
+      return_full_text: false,
+      ...buildChatTemplateOption(model),
+    },
+  );
   if (input.signal?.aborted) throw new DOMException("字幕纠错已取消", "AbortError");
   const retryGeneratedText = readGeneratedText(retryOutput);
   try {
     return constrainCorrectionToTrack(
-      extractSubtitleCorrectionResult(retryGeneratedText),
+      extractSubtitleCorrectionResult(retryGeneratedText, input.strictValidation),
       input.track,
+      input.strictValidation,
     );
   } catch (error) {
     if (!isRecoverableJsonOutputError(error)) throw error;
-    const recovered = recoverSubtitleCorrectionResult(retryGeneratedText, input.track);
+    const recovered = input.strictValidation
+      ? null
+      : recoverSubtitleCorrectionResult(retryGeneratedText, input.track);
     if (recovered) return recovered;
     throw error;
   }
+}
+
+function fitsTokenizer(
+  messages: SubtitlePostProcessorMessage[],
+  pipeline: TextGenerationPipeline,
+  outputTokens: number,
+): boolean {
+  const text = messages.map((message) => message.content).join("\n");
+  const ids = pipeline.tokenizer?.encode?.(text) ?? pipeline.tokenizer?.(text).input_ids;
+  const conservativeEstimate =
+    Math.ceil(text.replace(/[^\p{ASCII}]/gu, "").length / 3) +
+    (text.match(/[^\p{ASCII}]/gu)?.length ?? 0);
+  const count =
+    ids === undefined
+      ? conservativeEstimate
+      : Array.isArray(ids)
+        ? Array.isArray(ids[0])
+          ? ids[0].length
+          : ids.length
+        : (ids.dims?.at(-1) ?? ids.data?.length ?? conservativeEstimate);
+  const window = pipeline.model?.config?.max_position_embeddings ?? 4096;
+  return count + outputTokens + 256 <= window;
+}
+
+function fitContextToTokenizer(
+  input: SubtitlePostProcessorInput,
+  pipeline: TextGenerationPipeline,
+  outputTokens: number,
+): SubtitlePostProcessorInput | null {
+  let context: SubtitlePostProcessorContext = { ...input.context };
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const candidate = { ...input, context };
+    if (fitsTokenizer(buildSubtitlePostProcessorMessages(candidate), pipeline, outputTokens))
+      return candidate;
+    context = {
+      ...context,
+      code: context.code?.slice(0, Math.floor((context.code.length ?? 0) / 2)),
+      runtimeOutput: context.runtimeOutput?.slice(
+        0,
+        Math.floor((context.runtimeOutput.length ?? 0) / 2),
+      ),
+      glossary: context.glossary?.slice(0, Math.floor(context.glossary.length / 2)),
+    };
+  }
+  const candidate = { ...input, context: { language: context.language } };
+  return fitsTokenizer(buildSubtitlePostProcessorMessages(candidate), pipeline, outputTokens)
+    ? candidate
+    : null;
 }
 
 async function loadPipelineWithFallback({
@@ -239,7 +325,9 @@ function isRecoverableModelLoadError(
 }
 
 function buildChatTemplateOption(model: string): { chat_template?: string } {
-  return model.includes("code-tape-subtitle-postprocessor") ? { chat_template: SMOLLM_CHAT_TEMPLATE } : {};
+  return model.includes("code-tape-subtitle-postprocessor")
+    ? { chat_template: SMOLLM_CHAT_TEMPLATE }
+    : {};
 }
 
 function isQuantizedWeightCompatibilityError(error: unknown): boolean {
@@ -266,9 +354,15 @@ async function loadDefaultPipeline(
   model: string,
   options: TextGenerationPipelineOptions,
 ): Promise<TextGenerationPipeline> {
-  return loadTransformersPipeline<TextGenerationPipeline>(task, model, options, {}, {
-    vendored: model === DEFAULT_POSTPROCESSOR_MODEL,
-  });
+  return loadTransformersPipeline<TextGenerationPipeline>(
+    task,
+    model,
+    options,
+    {},
+    {
+      vendored: model === DEFAULT_POSTPROCESSOR_MODEL,
+    },
+  );
 }
 
 function readGeneratedText(output: unknown): string {

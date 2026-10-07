@@ -16,6 +16,8 @@ coverage
 playwright-report
 test-results
 scratch/
+.code-tape-data/
+perf-results/
 
 ml/subtitle-postprocessor/data/generated
 ml/subtitle-postprocessor/output

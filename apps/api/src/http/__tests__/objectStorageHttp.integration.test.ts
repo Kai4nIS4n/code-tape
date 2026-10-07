@@ -21,6 +21,7 @@ test("create upload session returns fetchable HTTP upload targets", async () => 
   const objectStorage = createLocalDevObjectStorage({ publicBaseUrl: PUBLIC_BASE_URL });
   const handler = createApiHandler({
     cloud: createCloudApiHandler({
+      allowLegacyAuth: true,
       service: createCloudRecordingService({
         metadata: createMemoryMetadataRepository(),
         objectStorage,
@@ -75,6 +76,7 @@ test("cloud playback center acceptance flow stays ready through upload, playback
   const service = createCloudRecordingService({ metadata, objectStorage });
   const handler = createApiHandler({
     cloud: createCloudApiHandler({
+      allowLegacyAuth: true,
       service,
       createRequestId: () => "req-cloud-acceptance",
     }),

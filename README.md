@@ -8,6 +8,21 @@
 
 当前个人升级的提交、推送和 PR 目标为 [Kai4nIS4n/code-tape](https://github.com/Kai4nIS4n/code-tape)。默认在这个 fork 内完成分支开发与审查，不向上游提交 PR。下述培训认领/计分机制仅适用于参与上游协作，个人升级不要求上游 Issue 或维护者确认。
 
+功能升级的开发与 CI 使用 Node.js 24 LTS（见 `.nvmrc`），安装依赖后运行本地 Web 与 API。账号和协同服务的数据目录默认 `.code-tape-data/`，生产 JWT 密钥必须通过环境配置，不能把私有数据目录或密钥提交到 Git。
+
+## 本地运行升级版
+
+使用 Node.js 24 安装和构建：
+
+```sh
+npm ci
+npm run build
+```
+
+在两个终端分别运行 `npm run demo:start`（API，默认 4173）与 `npm run dev`（Web，默认 5173）。访问 Web 页面注册两个不同账号，候选人创建房间并邀请另一个账号，即可验证双向编辑和离线合并。普通本地录制与本地回放不要求登录，云上传和面试房间要求登录。
+
+生产同源部署、密钥、数据目录、备份与回滚见 [部署与迁移](docs/CodeTape-部署与迁移.md)。升级范围与验收见 [功能升级 Spec](docs/CodeTape-功能升级Spec.md) 和 [实施记录](docs/CodeTape-升级实施记录.md)。性能实验使用独立生产构建，方法见 [实验说明](scripts/perf/README.md)。
+
 > [规范工作流程](docs/规范工作流程.md)
 | [技术模块拆解](docs/技术模块拆解.md)
 | [项目时间规划](docs/项目时间规划.md)

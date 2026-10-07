@@ -18,13 +18,17 @@ type InitialReplayStateInput = {
   initialTheme: ReplayStableState["editor"]["theme"];
 };
 
-const RECORDING_LANGUAGES: readonly RecordingLanguage[] = [
+export const RECORDING_LANGUAGES: readonly RecordingLanguage[] = [
   "javascript",
   "typescript",
   "python",
   "html",
   "css",
 ];
+
+export function recordingDocumentId(language: RecordingLanguage): `source:${RecordingLanguage}` {
+  return `source:${language}`;
+}
 
 function isScriptLanguage(language: RecordingLanguage): language is RecordingScriptLanguage {
   return language === "javascript" || language === "typescript";
@@ -135,6 +139,10 @@ export const replayReducer: ReplayReducer = (
           code: event.payload.code,
         },
       };
+      const activatesDocument = !event.payload.documentId || event.payload.legacyActivatesDocument === true;
+      if (!activatesDocument && language !== state.editor.language) {
+        return { ...state, editor: { ...state.editor, documents: nextDocuments } };
+      }
       return {
         ...state,
         editor: {
@@ -142,6 +150,7 @@ export const replayReducer: ReplayReducer = (
           documents: nextDocuments,
           code: event.payload.code,
           language,
+          activeDocumentId: recordingDocumentId(language),
           activeScriptLanguage: isScriptLanguage(language)
             ? language
             : state.editor.activeScriptLanguage ?? activeScriptLanguageFor(state.editor.language),
@@ -158,6 +167,7 @@ export const replayReducer: ReplayReducer = (
           ...state.editor,
           documents,
           language: nextLanguage,
+          activeDocumentId: recordingDocumentId(nextLanguage),
           code: nextDocument.code,
           cursor: nextDocument.cursor,
           selection: nextDocument.selection,
@@ -171,15 +181,17 @@ export const replayReducer: ReplayReducer = (
     }
     case "selection-change": {
       const documents = ensureDocuments(state.editor);
-      const currentDocument = documents[state.editor.language] ?? emptyDocumentState();
+      const language = event.payload.documentId?.slice(7) as RecordingLanguage | undefined ?? state.editor.language;
+      const currentDocument = documents[language] ?? emptyDocumentState();
       const nextDocuments = {
         ...documents,
-        [state.editor.language]: {
+        [language]: {
           ...currentDocument,
           cursor: event.payload.cursor,
           selection: event.payload.selection,
         },
       };
+      if (language !== state.editor.language) return { ...state, editor: { ...state.editor, documents: nextDocuments } };
       return {
         ...state,
         editor: {
@@ -192,15 +204,17 @@ export const replayReducer: ReplayReducer = (
     }
     case "editor-scroll": {
       const documents = ensureDocuments(state.editor);
-      const currentDocument = documents[state.editor.language] ?? emptyDocumentState();
+      const language = event.payload.documentId?.slice(7) as RecordingLanguage | undefined ?? state.editor.language;
+      const currentDocument = documents[language] ?? emptyDocumentState();
       const nextDocuments = {
         ...documents,
-        [state.editor.language]: {
+        [language]: {
           ...currentDocument,
           scrollTop: event.payload.scrollTop,
           scrollLeft: event.payload.scrollLeft,
         },
       };
+      if (language !== state.editor.language) return { ...state, editor: { ...state.editor, documents: nextDocuments } };
       return {
         ...state,
         editor: {
@@ -228,12 +242,15 @@ export const replayReducer: ReplayReducer = (
     case "run-start":
       return {
         ...state,
-        runtime: { status: "running", stdout: [], stderr: [], previewHtml: null, errorMessage: null },
+        runtime: { status: "running", stdout: [], stderr: [], previewHtml: null, errorMessage: null,
+          activeRunId: event.payload.runId, inputDocumentsHash: event.payload.inputDocumentsHash },
       };
     case "run-output":
+      if (state.runtime.activeRunId && state.runtime.activeRunId !== event.payload.runId) return state;
       return {
         ...state,
         runtime: {
+          ...state.runtime,
           status: "success",
           stdout: event.payload.stdout,
           stderr: event.payload.stderr,
@@ -242,9 +259,11 @@ export const replayReducer: ReplayReducer = (
         },
       };
     case "run-error":
+      if (state.runtime.activeRunId && state.runtime.activeRunId !== event.payload.runId) return state;
       return {
         ...state,
         runtime: {
+          ...state.runtime,
           status: "error",
           stdout: event.payload.stdout,
           stderr: event.payload.stderr,
@@ -293,6 +312,7 @@ function buildInitialReplayState(input: InitialReplayStateInput): ReplayStableSt
     editor: {
       code: initialDocument.code,
       language: input.initialLanguage,
+      activeDocumentId: recordingDocumentId(input.initialLanguage),
       activeScriptLanguage: input.initialActiveScriptLanguage ?? activeScriptLanguageFor(input.initialLanguage),
       documents,
       cursor: initialDocument.cursor,

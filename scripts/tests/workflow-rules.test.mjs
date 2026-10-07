@@ -1513,7 +1513,7 @@ test('contract guard workflow keeps its required check enabled without GitNexus 
   assert.match(workflow, /name:\s*Contract Guard \/ gitnexus-contract/u);
   assert.match(workflow, /if:\s*github\.event_name == 'pull_request'/u);
   assert.match(workflow, /actions\/setup-node@v4/);
-  assert.match(workflow, /node-version:\s*22/);
+  assert.match(workflow, /node-version:\s*24/);
   assert.doesNotMatch(workflow, /node-version:\s*20/);
   assert.match(workflow, /run:\s*npm run contract:check\s*$/m);
   assert.doesNotMatch(workflow, /npm run contract:gitnexus/u);

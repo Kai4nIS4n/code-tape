@@ -2,6 +2,8 @@ import "fake-indexeddb/auto";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRecordingStore } from "../recordingStore";
+import { buildRecordingZip } from "../recordingArchive";
+import { canonicalStringify, sha256Hex } from "@/shared/util/hash";
 import type {
   RecordingEvent,
   RecordingIndexes,
@@ -9,6 +11,7 @@ import type {
   RecordingMeta,
   RecordingSnapshot,
   RecordingRepository,
+  RecordingPackageV1,
   SaveDraftInput,
 } from "@/shared/recording-schema";
 
@@ -134,6 +137,73 @@ beforeEach(() => {
 
 afterEach(async () => {
   /* fake-indexeddb already gives us isolated databases through name uniqueness */
+});
+
+describe("0.1.0 recording compatibility", () => {
+  it("loads a real old IndexedDB record using its original manifest version before migration", async () => {
+    const dbName = uniqueDbName();
+    const pkg = await makeLegacyPackage("legacy-idb");
+    await seedLegacyRecording(dbName, pkg);
+    const store = createRecordingStore({ databaseName: dbName });
+
+    const loaded = await store.load(pkg.meta.id);
+
+    if (!loaded.ok) throw new Error(JSON.stringify(loaded.error));
+    expect(loaded.package.schemaVersion).toBe("0.2.0");
+    expect(loaded.package.manifest.schemaVersion).toBe("0.2.0");
+    expect(loaded.package.events[0]).toMatchObject({ payload: { documentId: "source:javascript", legacyActivatesDocument: true } });
+    expect(loaded.package.snapshots[0].state.editor.activeDocumentId).toBe("source:javascript");
+    expect(await readRawRecording(dbName, pkg.meta.id)).toMatchObject({ manifest: pkg.manifest });
+  });
+
+  it("exports an old stored ZIP unchanged and imports it as a fully migrated package", async () => {
+    const dbName = uniqueDbName();
+    const pkg = await makeLegacyPackage("legacy-export");
+    await seedLegacyRecording(dbName, pkg);
+    const source = createRecordingStore({ databaseName: dbName });
+    const zipBlob = await source.exportZip(pkg.meta.id);
+    const archive = await JSZip.loadAsync(zipBlob);
+    expect(JSON.parse(await archive.file("manifest.json")!.async("string"))).toEqual(pkg.manifest);
+    expect(JSON.parse(await archive.file("events.json")!.async("string"))).toEqual(pkg.events);
+    const sink = createRecordingStore({ databaseName: uniqueDbName() });
+
+    const imported = await sink.importZip(zipBlob);
+    if (!imported.ok) throw new Error(imported.message);
+    const loaded = await sink.load(pkg.meta.id);
+
+    if (!loaded.ok) throw new Error(JSON.stringify(loaded.error));
+    expect(loaded.package.schemaVersion).toBe("0.2.0");
+    expect(loaded.package.events[0]).toMatchObject({ payload: { documentId: "source:javascript", legacyActivatesDocument: true } });
+  });
+
+  it("persists migrated events and snapshots when importing an old ZIP, with new matching checksums", async () => {
+    const pkg = await makeLegacyPackage("legacy-import");
+    const zipBlob = await buildRecordingZip(pkg, null);
+    const store = createRecordingStore({ databaseName: uniqueDbName() });
+
+    const imported = await store.importZip(zipBlob);
+    if (!imported.ok) throw new Error(imported.message);
+    const loaded = await store.load(pkg.meta.id);
+    if (!loaded.ok) throw new Error(JSON.stringify(loaded.error));
+    expect(loaded.package.snapshots[0].state.editor.activeDocumentId).toBe("source:javascript");
+    expect(loaded.package.manifest.checksums.eventsSha256).toBe(await sha256Hex(canonicalStringify(loaded.package.events)));
+    expect(loaded.package.manifest.checksums.snapshotsSha256).toBe(await sha256Hex(canonicalStringify(loaded.package.snapshots)));
+    const exported = await JSZip.loadAsync(await store.exportZip(pkg.meta.id));
+    expect(JSON.parse(await exported.file("manifest.json")!.async("string"))).toMatchObject({ schemaVersion: "0.2.0" });
+    expect(JSON.parse(await exported.file("snapshots.json")!.async("string"))[0].state.editor.activeDocumentId).toBe("source:javascript");
+  });
+
+  it("rejects tampered old ZIP bytes before migration and writes nothing", async () => {
+    const pkg = await makeLegacyPackage("legacy-tampered");
+    const archive = await JSZip.loadAsync(await buildRecordingZip(pkg, null));
+    archive.file("events.json", JSON.stringify([makeEvent(3)]));
+    const store = createRecordingStore({ databaseName: uniqueDbName() });
+
+    const imported = await store.importZip(await archive.generateAsync({ type: "blob" }));
+
+    expect(imported).toMatchObject({ ok: false, reason: "validation-failed", message: "checksum-mismatch:events" });
+    expect(await store.list()).toEqual([]);
+  });
 });
 
 describe("createRecordingStore — two-phase commit", () => {
@@ -633,6 +703,39 @@ async function readRawRecording(dbName: string, id: string): Promise<{ manifest:
     const value = await requestToPromise(tx.objectStore("recordings").get(id));
     await transactionDone(tx);
     return value as { manifest: { status: string }; thumbnailBlobId: string | null } | undefined;
+  } finally {
+    db.close();
+  }
+}
+
+async function makeLegacyPackage(id: string): Promise<RecordingPackageV1> {
+  const events = [makeEvent(1), makeEvent(2)];
+  const snapshots = [makeSnapshot(2)];
+  const meta = makeMeta(id);
+  return {
+    schemaVersion: "0.1.0",
+    manifest: {
+      packageId: `pkg-${id}`,
+      schemaVersion: "0.1.0",
+      status: "complete",
+      createdAt: meta.createdAt,
+      completedAt: meta.createdAt,
+      checksums: { eventsSha256: await sha256Hex(canonicalStringify(events)), snapshotsSha256: await sha256Hex(canonicalStringify(snapshots)) },
+    },
+    meta,
+    events,
+    snapshots,
+    indexes: emptyIndexes(),
+    media: null,
+  };
+}
+
+async function seedLegacyRecording(dbName: string, pkg: RecordingPackageV1): Promise<void> {
+  const db = await openRecordingDatabaseV1(dbName);
+  try {
+    const tx = db.transaction("recordings", "readwrite");
+    tx.objectStore("recordings").put({ id: pkg.meta.id, manifest: pkg.manifest, meta: pkg.meta, events: pkg.events, snapshots: pkg.snapshots, indexes: pkg.indexes, media: pkg.media, blobId: null, thumbnailBlobId: null, createdAtMs: Date.parse(pkg.meta.createdAt) });
+    await transactionDone(tx);
   } finally {
     db.close();
   }

@@ -9,9 +9,15 @@ import type {
 } from "@/shared/recording-schema";
 import type { ReplayMediaClockAdapter } from "./mediaClockAdapter";
 import { buildInitialState, cloneState } from "./initialState";
-import { findSnapshotAtMost, buildReplayIndex } from "./replayIndex";
+import {
+  findSnapshotAtMost,
+  buildReplayIndex,
+  upperBoundEventSeq,
+  findStableEventIndexAtMost,
+} from "./replayIndex";
 import { replayReducer } from "./replayReducer";
 import { createTimelineClock } from "./timelineClock";
+import { createDebugLog, type DebugLogOptions } from "@/shared/debugLog";
 
 export type TickListener = (
   state: ReplayStableState,
@@ -34,11 +40,18 @@ export type ReplaySchedulerOptions = {
   onTick?: TickListener;
   /** Called once when stalled media has been blocking replay for 2s. */
   onMediaFallbackReady?: () => void;
+  debug?: DebugLogOptions;
 };
 
 export type TickStrategy = {
   start(onFrame: () => void): void;
   stop(): void;
+};
+
+export type ReplaySeekResult = {
+  status: "applied" | "superseded";
+  packageGeneration: number;
+  seekGeneration: number;
 };
 
 const DEFAULT_RAF_INTERVAL_MS = 1000 / 60;
@@ -62,9 +75,10 @@ export function defaultTickStrategy(): TickStrategy {
           handle = setTimeout(loop, DEFAULT_RAF_INTERVAL_MS) as unknown as number;
         }
       };
-      handle = typeof requestAnimationFrame === "function"
-        ? (requestAnimationFrame(loop) as unknown as number)
-        : (setTimeout(loop, DEFAULT_RAF_INTERVAL_MS) as unknown as number);
+      handle =
+        typeof requestAnimationFrame === "function"
+          ? (requestAnimationFrame(loop) as unknown as number)
+          : (setTimeout(loop, DEFAULT_RAF_INTERVAL_MS) as unknown as number);
     },
     stop() {
       if (handle === null) return;
@@ -94,6 +108,9 @@ export function createReplayScheduler(options: ReplaySchedulerOptions = {}): Rep
   tick(): void;
   /** Test hook — exposes the latest stable state. */
   getStableState(): ReplayStableState;
+  seekWithResult(targetMs: number): Promise<ReplaySeekResult>;
+  isCurrentSeek(result: ReplaySeekResult): boolean;
+  invalidate(): void;
 } {
   const clock = options.clock ?? createTimelineClock();
   const tickStrategy = options.tickStrategy ?? defaultTickStrategy();
@@ -101,6 +118,7 @@ export function createReplayScheduler(options: ReplaySchedulerOptions = {}): Rep
     options.wallNow ??
     (() => (typeof performance === "undefined" ? Date.now() : performance.now()));
   const stateListeners = new Set<(s: ReplaySchedulerState) => void>();
+  const debug = createDebugLog(options.debug);
   let pkg: RecordingPackageV1 | null = null;
   let index = emptyIndex();
   let initial: ReplayStableState = emptyState();
@@ -110,6 +128,9 @@ export function createReplayScheduler(options: ReplaySchedulerOptions = {}): Rep
   let mediaBlockedSinceMs: number | null = null;
   let mediaFallbackNotified = false;
   let nextEventIndex = 0;
+  let packageGeneration = 0;
+  let seekGeneration = 0;
+  let seekResume = false;
 
   let schedulerState: ReplaySchedulerState = {
     status: "loading",
@@ -144,7 +165,12 @@ export function createReplayScheduler(options: ReplaySchedulerOptions = {}): Rep
     const snapshot = findSnapshotAtMost(index.snapshotsByTime, targetMs);
     let state = snapshot ? cloneState(snapshot.state) : cloneState(initial);
     let lastSeq = snapshot ? snapshot.eventSeq : 0;
-    for (const event of index.stableEventsByTime) {
+    for (
+      let cursor = upperBoundEventSeq(index.stableEventsByTime, lastSeq);
+      cursor < index.stableEventsByTime.length;
+      cursor += 1
+    ) {
+      const event = index.stableEventsByTime[cursor];
       if (event.timestampMs > targetMs) break;
       if (event.seq <= lastSeq) continue;
       state = replayReducer(state, event);
@@ -296,19 +322,9 @@ export function createReplayScheduler(options: ReplaySchedulerOptions = {}): Rep
     targetMs: number,
     windowMs: number,
   ): RecordingEvent | null => {
-    let latest: RecordingEvent | null = null;
     const minTimeMs = Math.max(0, targetMs - windowMs);
-    for (const event of events) {
-      if (event.timestampMs < minTimeMs || event.timestampMs > targetMs) continue;
-      if (
-        !latest ||
-        event.timestampMs > latest.timestampMs ||
-        (event.timestampMs === latest.timestampMs && event.seq > latest.seq)
-      ) {
-        latest = event;
-      }
-    }
-    return latest;
+    const latest = events[findStableEventIndexAtMost(events, targetMs)];
+    return latest && latest.timestampMs >= minTimeMs ? latest : null;
   };
 
   const transientEventsForSeek = (targetMs: number): RecordingEvent[] => {
@@ -383,6 +399,75 @@ export function createReplayScheduler(options: ReplaySchedulerOptions = {}): Rep
     tickStrategy.start(tickOnce);
   };
 
+  const isCurrentSeek = (result: ReplaySeekResult) =>
+    result.packageGeneration === packageGeneration &&
+    result.seekGeneration === seekGeneration &&
+    pkg !== null;
+  const invalidate = () => {
+    packageGeneration += 1;
+    seekGeneration += 1;
+    mediaAdapter?.cancelPendingSeek?.();
+    tickStrategy.stop();
+    clock.pause();
+    driving = false;
+    pkg = null;
+  };
+  const seekWithResult = async (targetMs: number): Promise<ReplaySeekResult> => {
+    const result: ReplaySeekResult = {
+      status: "superseded",
+      packageGeneration,
+      seekGeneration: ++seekGeneration,
+    };
+    const trace = (outcome: "started" | "applied" | "superseded") =>
+      debug({
+        event: "replay-seek",
+        outcome,
+        packageGeneration: result.packageGeneration,
+        seekGeneration: result.seekGeneration,
+        targetMs,
+        lastAppliedSeq: schedulerState.lastAppliedSeq,
+      });
+    const superseded = () => {
+      trace("superseded");
+      return result;
+    };
+    trace("started");
+    if (!pkg) return superseded();
+    if (schedulerState.status !== "seeking")
+      seekResume = schedulerState.status === "playing" || schedulerState.status === "buffering";
+    tickStrategy.stop();
+    clock.pause();
+    driving = false;
+    updateState({ status: "seeking" });
+    const clamped = Math.max(0, Math.min(targetMs, pkg.meta.durationMs));
+    const recomputed = recomputeFromTime(clamped);
+    const activeAdapter = mediaAdapter;
+    try {
+      if (activeAdapter) await activeAdapter.seek(clamped);
+    } catch (error) {
+      if (!isCurrentSeek(result)) return superseded();
+      reportMediaOperationError(error);
+    }
+    if (!isCurrentSeek(result)) return superseded();
+    stableState = recomputed.state;
+    nextEventIndex = findFirstEventIndexAfterSeq(recomputed.lastSeq);
+    clock.setBase(clamped);
+    updateState({
+      timelineTimeMs: clamped,
+      lastAppliedSeq: recomputed.lastSeq,
+      status: seekResume ? "playing" : "paused",
+      mediaStatus: currentMediaStatus(),
+      driftMs: 0,
+    });
+    if (seekResume) {
+      clock.play();
+      ensureDriving();
+    }
+    options.onTick?.(stableState, transientEventsForSeek(clamped), clamped);
+    trace("applied");
+    return { ...result, status: "applied" };
+  };
+
   return {
     setMediaAdapter(adapter) {
       const adapterChanged = adapter !== mediaAdapter;
@@ -396,6 +481,9 @@ export function createReplayScheduler(options: ReplaySchedulerOptions = {}): Rep
       updateState({ mediaStatus });
     },
     async load(input) {
+      invalidate();
+      clock.setBase(0);
+      debug({ event: "replay-load", outcome: "started", packageGeneration, seekGeneration });
       pkg = input;
       index = buildReplayIndex(input);
       initial = buildInitialState(input);
@@ -411,9 +499,21 @@ export function createReplayScheduler(options: ReplaySchedulerOptions = {}): Rep
         mediaStatus: currentMediaStatus(),
         driftMs: 0,
       });
+      debug({
+        event: "replay-load",
+        outcome: "applied",
+        packageGeneration,
+        seekGeneration,
+        timelineTimeMs: 0,
+        lastAppliedSeq: 0,
+      });
     },
     play() {
       if (!pkg) return;
+      if (schedulerState.status === "seeking") {
+        seekResume = true;
+        return;
+      }
       if (schedulerState.status === "ended") {
         const { state, lastSeq } = recomputeFromTime(0);
         stableState = state;
@@ -435,33 +535,14 @@ export function createReplayScheduler(options: ReplaySchedulerOptions = {}): Rep
       ensureDriving();
     },
     pause() {
+      seekResume = false;
       clock.pause();
       tickStrategy.stop();
       driving = false;
       updateState({ status: "paused" });
     },
     async seek(targetMs) {
-      if (!pkg) return;
-      const shouldResumePlayback =
-        schedulerState.status === "playing" || schedulerState.status === "buffering";
-      tickStrategy.stop();
-      driving = false;
-      updateState({ status: "seeking" });
-      const clamped = Math.max(0, Math.min(targetMs, pkg.meta.durationMs));
-      const { state, lastSeq } = recomputeFromTime(clamped);
-      stableState = state;
-      nextEventIndex = findFirstEventIndexAfterSeq(lastSeq);
-      clock.setBase(clamped);
-      if (mediaAdapter) await mediaAdapter.seek(clamped);
-      updateState({
-        timelineTimeMs: clamped,
-        lastAppliedSeq: lastSeq,
-        status: shouldResumePlayback ? "playing" : "paused",
-        mediaStatus: currentMediaStatus(),
-        driftMs: 0,
-      });
-      if (shouldResumePlayback) ensureDriving();
-      options.onTick?.(stableState, transientEventsForSeek(clamped), clamped);
+      await seekWithResult(targetMs);
     },
     setRate(rate: ReplayPlaybackRate) {
       clock.setRate(rate);
@@ -475,7 +556,7 @@ export function createReplayScheduler(options: ReplaySchedulerOptions = {}): Rep
       /* Forwarded by the HTMLMediaElement driver. */
     },
     destroy() {
-      tickStrategy.stop();
+      invalidate();
       stateListeners.clear();
       driving = false;
       pkg = null;
@@ -487,6 +568,9 @@ export function createReplayScheduler(options: ReplaySchedulerOptions = {}): Rep
     },
     tick: tickOnce,
     getStableState: () => stableState,
+    seekWithResult,
+    isCurrentSeek,
+    invalidate,
   };
 }
 

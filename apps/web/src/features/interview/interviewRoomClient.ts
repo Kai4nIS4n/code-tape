@@ -1,3 +1,5 @@
+import { authClient } from "@/features/auth/authClient";
+
 export type InterviewRoomStatus = "waiting" | "connecting" | "live" | "ended" | "expired";
 
 export type CreateInterviewRoomResponse = {
@@ -9,6 +11,7 @@ export type CreateInterviewRoomResponse = {
 };
 
 export type GetInterviewRoomResponse = {
+  joinCode?: string;
   roomId: string;
   status: InterviewRoomStatus;
   expiresAt: string;
@@ -56,10 +59,44 @@ export type InterviewRoomClientOptions = {
   fetch?: typeof fetch;
 };
 
+export function createInterviewRoomInvite(
+  roomId: string,
+  options: InterviewRoomClientOptions = {},
+): Promise<InterviewRoomClientResult<{ joinCode: string; expiresAt: string }>> {
+  return requestJson({
+    fetch: options.fetch ?? authClient.fetch,
+    url: buildUrl(`/api/interviews/rooms/${encodeURIComponent(roomId)}/invites`, options.baseUrl),
+    init: { method: "POST", headers: { "content-type": "application/json" }, body: "{}" },
+    validate(value) {
+      if (!isJsonObject(value)) return null;
+      const joinCode = value.joinCode ?? value.token;
+      return isNonEmptyString(joinCode) && isNonEmptyString(value.expiresAt)
+        ? { joinCode, expiresAt: value.expiresAt }
+        : null;
+    },
+  });
+}
+
 export function createInterviewRoomClient(
   options: InterviewRoomClientOptions = {},
 ): InterviewRoomClient {
-  const fetchImpl = options.fetch ?? defaultFetch;
+  const fetchImpl = options.fetch ?? authClient.fetch;
+
+  const authorizeSignaling = async <T extends { roomId: string; signalingUrl: string }>(result: InterviewRoomClientResult<T>): Promise<InterviewRoomClientResult<T>> => {
+    if (!result.ok || options.fetch) return result;
+    try {
+      const response = await fetchImpl(buildUrl(`/api/interviews/rooms/${encodeURIComponent(result.value.roomId)}/ws-tickets`, options.baseUrl), {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ purpose: "signaling" }),
+      });
+      // A failed optional media ticket must not discard a successfully created
+      // room and prevent its independent collaboration connection.
+      if (!response.ok) return result;
+      const ticket = await response.json() as { ticket: string };
+      const url = buildUrl(result.value.signalingUrl, options.baseUrl);
+      url.searchParams.set("ticket", ticket.ticket);
+      return { ok: true, value: { ...result.value, signalingUrl: url.href } };
+    } catch { return result; }
+  };
 
   return {
     createRoom() {
@@ -68,9 +105,15 @@ export function createInterviewRoomClient(
         url: buildUrl("/api/interviews/rooms", options.baseUrl),
         init: { method: "POST" },
         validate: parseCreateRoomResponse,
-      });
+      }).then(authorizeSignaling);
     },
-    getRoom(roomId, joinCode) {
+    async getRoom(roomId, joinCode) {
+      if (joinCode && !options.fetch) {
+        const joined = await fetchImpl(buildUrl(`/api/interviews/rooms/${encodeURIComponent(roomId)}/join`, options.baseUrl), {
+          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ joinCode }),
+        });
+        if (!joined.ok) return { ok: false, error: { code: "join-failed", message: "邀请已失效或账号无权加入", status: joined.status } };
+      }
       const url = buildUrl(
         `/api/interviews/rooms/${encodeURIComponent(roomId)}`,
         options.baseUrl,
@@ -81,7 +124,7 @@ export function createInterviewRoomClient(
         url,
         init: { method: "GET" },
         validate: parseGetRoomResponse,
-      });
+      }).then(authorizeSignaling);
     },
     endRoom(roomId, input) {
       return requestJson({
@@ -174,6 +217,11 @@ function parseErrorResponse(value: unknown, status: number): InterviewRoomClient
 
 function parseCreateRoomResponse(value: unknown): CreateInterviewRoomResponse | null {
   if (!isJsonObject(value)) return null;
+  if (isJsonObject(value.room)) {
+    const room = value.room;
+    value = { ...room, roomId: room.id, signalingUrl: buildSignalingUrl(String(room.id)) };
+  }
+  if (!isJsonObject(value)) return null;
   if (
     !isNonEmptyString(value.roomId) ||
     !isNonEmptyString(value.joinCode) ||
@@ -194,6 +242,11 @@ function parseCreateRoomResponse(value: unknown): CreateInterviewRoomResponse | 
 
 function parseGetRoomResponse(value: unknown): GetInterviewRoomResponse | null {
   if (!isJsonObject(value)) return null;
+  if (isJsonObject(value.room)) {
+    const room = value.room;
+    value = { ...room, roomId: room.id, candidateConnected: room.candidateConnected ?? false, interviewerConnected: room.interviewerConnected ?? false, signalingUrl: buildSignalingUrl(String(room.id)) };
+  }
+  if (!isJsonObject(value)) return null;
   if (
     !isNonEmptyString(value.roomId) ||
     !isInterviewRoomStatus(value.status) ||
@@ -205,6 +258,7 @@ function parseGetRoomResponse(value: unknown): GetInterviewRoomResponse | null {
   }
   return {
     roomId: value.roomId,
+    joinCode: typeof value.joinCode === "string" ? value.joinCode : undefined,
     status: value.status,
     expiresAt: value.expiresAt,
     candidateConnected: value.candidateConnected,
@@ -220,6 +274,8 @@ function buildSignalingUrl(roomId: string): string {
 }
 
 function parseEndRoomResponse(value: unknown): EndInterviewRoomResponse | null {
+  if (!isJsonObject(value)) return null;
+  if (isJsonObject(value.room)) value = { ...value.room, roomId: value.room.id };
   if (!isJsonObject(value)) return null;
   if (
     !isNonEmptyString(value.roomId) ||
@@ -244,13 +300,6 @@ function defaultBaseUrl(): string {
     return window.location.href;
   }
   return "http://localhost/";
-}
-
-function defaultFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  if (typeof fetch === "undefined") {
-    return Promise.reject(new Error("fetch is not available in this environment"));
-  }
-  return fetch(input, init);
 }
 
 function isInterviewRoomStatus(value: unknown): value is InterviewRoomStatus {

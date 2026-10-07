@@ -12,6 +12,31 @@ export type SubtitleTrack = {
   source: "huggingface-local" | "external-asr" | "backend-job";
   language?: string;
   segments: SubtitleSegment[];
+  revision?: number;
+};
+
+export type SubtitleCodeAnchor = {
+  segmentId: string;
+  targetMs: number;
+  eventSeq: number;
+  documentId: string;
+  contentHash: string;
+  range?: {
+    startLineNumber: number;
+    startColumn: number;
+    endLineNumber: number;
+    endColumn: number;
+  };
+  source: "recorded-selection" | "recorded-cursor" | "manual";
+};
+
+export type SubtitleAsset = {
+  recordingId: string;
+  sourceEventsChecksum: string;
+  subtitleTrackRevision: number;
+  track: SubtitleTrack;
+  chapters: SubtitleChapter[];
+  anchors: SubtitleCodeAnchor[];
 };
 
 export type SubtitleChapter = {
@@ -31,6 +56,7 @@ export type SubtitleCorrectionResult = {
     startMs: number;
     endMs?: number;
   }>;
+  validationWarnings?: SubtitleCorrectionWarning[];
 };
 
 export type SubtitlePostProcessorContext = {
@@ -45,6 +71,7 @@ export type SubtitlePostProcessorInput = {
   track: SubtitleTrack;
   context?: SubtitlePostProcessorContext;
   signal?: AbortSignal;
+  strictValidation?: boolean;
 };
 
 export type SubtitlePostProcessorMetric = {
@@ -63,7 +90,7 @@ export type SubtitlePostProcessor = {
 };
 
 export type SubtitleCorrectionWarning = {
-  code: "invalid-correction" | "invalid-chapter";
+  code: "invalid-correction" | "invalid-chapter" | "invalid-anchor";
   message: string;
 };
 
@@ -94,4 +121,11 @@ export type SubtitleStore = {
   saveChapters(recordingId: string, chapters: SubtitleChapter[]): Promise<void>;
   saveWithChapters(track: SubtitleTrack, chapters: SubtitleChapter[]): Promise<void>;
   remove(recordingId: string): Promise<void>;
+  loadAsset?(recordingId: string): Promise<SubtitleAsset | null>;
+  /** Compare-and-swap prevents delayed model results overwriting a newer edit. */
+  saveAsset?(
+    asset: SubtitleAsset,
+    expectedRevision: number,
+    signal?: AbortSignal,
+  ): Promise<boolean>;
 };

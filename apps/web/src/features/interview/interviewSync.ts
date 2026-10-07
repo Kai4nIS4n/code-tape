@@ -67,7 +67,7 @@ export type InterviewPublishResult =
 
 export type InterviewSnapshotPublishResult =
   | { ok: true; message: InterviewSnapshotMessage }
-  | { ok: false; reason: "channel-not-open" | "send-failed" | "no-published-events" };
+  | { ok: false; reason: "channel-not-open" | "send-failed" | "no-published-events" | "snapshot-in-progress" | "flush-failed" };
 
 export type InterviewSyncPublisherOptions = {
   channel: InterviewRealtimeDataChannel;
@@ -79,6 +79,8 @@ export type InterviewSyncPublisherOptions = {
   snapshotState?: ReplayStableState;
   snapshotEventInterval?: number;
   snapshotTimeIntervalMs?: number;
+  /** Flush pending recorded text after the triggering event was published. */
+  beforeSnapshot?: () => void;
 };
 
 export type InterviewSyncPublisher = {
@@ -114,6 +116,7 @@ export function createInterviewSyncPublisher(
   let lastPublishedTimestampMs = 0;
   let stableEventsSinceSnapshot = 0;
   let lastSnapshotAtMs: number | null = null;
+  let preparingSnapshot = false;
 
   const advanceSnapshotState = (event: RecordingEvent) => {
     if (snapshotState) {
@@ -159,38 +162,40 @@ export function createInterviewSyncPublisher(
   };
 
   const publishSnapshot = (): InterviewSnapshotPublishResult => {
+    if (preparingSnapshot) return { ok: false, reason: "snapshot-in-progress" };
     if (options.channel.readyState !== "open") {
       return { ok: false, reason: "channel-not-open" };
     }
-    if (!snapshotState || lastPublishedSeq === null) {
-      return { ok: false, reason: "no-published-events" };
-    }
-
-    const message: InterviewSnapshotMessage = {
-      kind: "state-snapshot",
-      roomId: options.roomId,
-      sessionId: options.sessionId,
-      messageId: messageIdProvider(),
-      sentAt: nowProvider(),
-      snapshotSeq: lastPublishedSeq,
-      snapshotTimeMs: lastPublishedTimestampMs,
-      stateVersion: stateVersionProvider(),
-      state: cloneReplayStableState(snapshotState),
-    };
-
+    preparingSnapshot = true;
     try {
-      options.channel.send(JSON.stringify(message));
-    } catch {
-      return { ok: false, reason: "send-failed" };
+      try { options.beforeSnapshot?.(); }
+      catch { return { ok: false, reason: "flush-failed" }; }
+      if (!snapshotState || lastPublishedSeq === null) {
+        return { ok: false, reason: "no-published-events" };
+      }
+      const message: InterviewSnapshotMessage = {
+        kind: "state-snapshot",
+        roomId: options.roomId,
+        sessionId: options.sessionId,
+        messageId: messageIdProvider(),
+        sentAt: nowProvider(),
+        snapshotSeq: lastPublishedSeq,
+        snapshotTimeMs: lastPublishedTimestampMs,
+        stateVersion: stateVersionProvider(),
+        state: cloneReplayStableState(snapshotState),
+      };
+      try { options.channel.send(JSON.stringify(message)); }
+      catch { return { ok: false, reason: "send-failed" }; }
+      stableEventsSinceSnapshot = 0;
+      lastSnapshotAtMs = nowProvider();
+      return { ok: true, message };
+    } finally {
+      preparingSnapshot = false;
     }
-
-    stableEventsSinceSnapshot = 0;
-    lastSnapshotAtMs = nowProvider();
-    return { ok: true, message };
   };
 
   const maybeEmitSnapshot = () => {
-    if (!tracksSnapshots || lastPublishedSeq === null) return;
+    if (preparingSnapshot || !tracksSnapshots || lastPublishedSeq === null) return;
     const now = nowProvider();
     if (lastSnapshotAtMs === null) {
       lastSnapshotAtMs = now;
