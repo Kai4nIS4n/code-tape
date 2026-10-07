@@ -1,0 +1,97 @@
+{
+  "samples": 7,
+  "representativeSamples": 3,
+  "negativeSamples": 4,
+  "representativeOutputSource": "postprocessor-runner",
+  "representativePassRate": 1,
+  "representativeJsonValidRate": 1,
+  "representativeSegmentReferenceValidRate": 1,
+  "representativeCorrectionHitRate": 1,
+  "representativeTermHitRate": 1,
+  "representativeChapterTimelineValidRate": 1,
+  "representativeChapterTitleHitRate": 1,
+  "overallEvaluationDurationMs": 1.7713,
+  "averageFixtureValidationDurationMs": 0.2007,
+  "maxFixtureValidationDurationMs": 1.0966,
+  "detectedNegativeIssues": [
+    "duplicate-segment",
+    "invalid-chapter-timeline",
+    "invalid-json",
+    "unknown-segment"
+  ],
+  "failures": [],
+  "sampleResults": [
+    {
+      "id": "react-state-loop",
+      "kind": "representative",
+      "passed": true,
+      "outputSource": "postprocessor-runner",
+      "fixtureValidationDurationMs": 1.0966,
+      "issues": []
+    },
+    {
+      "id": "vite-worker-cache",
+      "kind": "representative",
+      "passed": true,
+      "outputSource": "postprocessor-runner",
+      "fixtureValidationDurationMs": 0.1399,
+      "issues": []
+    },
+    {
+      "id": "playwright-regression",
+      "kind": "representative",
+      "passed": true,
+      "outputSource": "postprocessor-runner",
+      "fixtureValidationDurationMs": 0.108,
+      "issues": []
+    },
+    {
+      "id": "invalid-json-output",
+      "kind": "negative",
+      "passed": true,
+      "outputSource": "fixture-output",
+      "fixtureValidationDurationMs": 0.0255,
+      "issues": [
+        "invalid-json"
+      ],
+      "expectedIssue": "invalid-json",
+      "expectedIssueDetected": true
+    },
+    {
+      "id": "unknown-segment-output",
+      "kind": "negative",
+      "passed": true,
+      "outputSource": "fixture-output",
+      "fixtureValidationDurationMs": 0.0127,
+      "issues": [
+        "unknown-segment"
+      ],
+      "expectedIssue": "unknown-segment",
+      "expectedIssueDetected": true
+    },
+    {
+      "id": "duplicate-segment-output",
+      "kind": "negative",
+      "passed": true,
+      "outputSource": "fixture-output",
+      "fixtureValidationDurationMs": 0.012,
+      "issues": [
+        "duplicate-segment"
+      ],
+      "expectedIssue": "duplicate-segment",
+      "expectedIssueDetected": true
+    },
+    {
+      "id": "invalid-chapter-timeline-output",
+      "kind": "negative",
+      "passed": true,
+      "outputSource": "fixture-output",
+      "fixtureValidationDurationMs": 0.0104,
+      "issues": [
+        "invalid-chapter-timeline"
+      ],
+      "expectedIssue": "invalid-chapter-timeline",
+      "expectedIssueDetected": true
+    }
+  ]
+}

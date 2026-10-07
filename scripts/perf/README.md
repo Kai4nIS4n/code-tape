@@ -43,3 +43,14 @@ node scripts/perf/browser-benchmark.mjs --after-web-root=/path/to/frozen/perform
 媒体组读取由 `record-media-fixture.mjs` 生成的真实 Native MediaRecorder 包与 WebM，并验证原 checksum、真实保存 blobs。只使用隔离浏览器的 fake-device 音视频，不触个人设备。每条原始样本记录 `seeking/seeked`、decoder currentTime/duration/readyState/seekable/buffered、超时及代码呈现时间；`Infinity` 的 decoder 时长如实保留，录制时钟的 duration 不冒充 decoder 实测。100 个测量目标之前有 10 个预热目标，失败也保留。ASR/LLM 推理的性能与质量须由其独立评估报告提供。
 
 参考：[Playwright BrowserContext](https://playwright.dev/docs/api/class-browsercontext)，[Chrome DevTools Network](https://chromedevtools.github.io/devtools-protocol/tot/Network/)，[LCP API](https://developer.mozilla.org/en-US/docs/Web/API/LargestContentfulPaint)。
+
+## 手工真实模型验证
+
+模型验证必须与导航/列表/媒体实验分开，不并发推理。下面脚本从当前仓库读取固定合成 WebM，启动自己的随机端口 `npm run dev` 和隔离浏览器，直接执行默认 ASR 与生产 LLM Worker；不调用外部付费 API，不放松 JSON 校验。macOS/Linux、Node 24、模型资产与 Chromium 为前提。
+
+```sh
+npm run subtitle:vendor
+node scripts/perf/browser-model-smoke.mjs --out=artifacts/perf/browser-model-smoke.json
+```
+
+可以用 `CODE_TAPE_CHROME_PATH` 指定已有 Chrome，或用 `--root=/path/to/checkout` 选择仓库。每流程 60 秒硬预算，结束关闭自己的服务、profile 和 worker；该脚本不属于 `quality:local`。真实模型输出若被校验拒绝会返回非零状态并保留原始错误，不把加载成功当成纠错成功。重复 warmUp 只证明实例/Promise 复用，不声称网络 HTTP 暖缓存。报告使用开发源模块、localhost 与已准备的权重，不能替代生产首屏或识别准确率评估。

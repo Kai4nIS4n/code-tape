@@ -79,6 +79,8 @@ node scripts/data-backup.mjs restore /srv/codetape-backups/2026-10-07-01 /srv/co
 
 三个前端发布开关默认开启：`VITE_CODE_TAPE_COLLABORATION_ENABLED`、`VITE_CODE_TAPE_EVENT_TIMELINE_ENABLED`、`VITE_CODE_TAPE_SUBTITLE_ANCHORS_ENABLED`。关闭事件面板保留旧进度条，关闭代码 anchor 保留字幕时间跳转，关闭协作保留本地录制；任何开关都不能关闭服务端账号和资产鉴权。
 
+API 的仓库根目录 `.env.local` 不会自动成为 Vite 配置。前端开关应放在 `apps/web/.env.local`，或通过构建进程环境显式传入，例如 `VITE_CODE_TAPE_COLLABORATION_ENABLED=false npm run build -w apps/web`；修改后需要重新部署 Web 构建，不是只重启 API。服务器密钥不能使用 `VITE_` 前缀，前端配置不是秘密。
+
 前端诊断日志默认关闭，只有以 `VITE_CODE_TAPE_DEBUG_ENABLED=true` 构建时才输出结构化 `console.debug`。日志使用固定阶段/结果与白名单数值、规范标识符，覆盖回放 load/seek 世代、观察流缺口与快照、协同持久化阶段，不记录源码、字幕、URL 或凭据。`send-called` 只表示调用发送成功，不证明服务端收到；判断落盘应看持久化 ACK。正式性能测量保持诊断日志关闭。
 
 ## 6. 可复现的恢复演练

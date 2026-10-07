@@ -1,0 +1,13 @@
+{
+  "subtitlePostprocessRuntimeBenchmark": {
+    "benchmarkName": "subtitle-panel-jsdom-mock-postprocessor",
+    "modelWorkerWarmUpDurationMs": 0.073,
+    "warmUpCompletedBeforeClick": true,
+    "clickToPostProcessorCallDurationMs": 5.256,
+    "mockWorkerInferenceDurationMs": 10.223,
+    "resultToUiCommitDurationMs": 3.193,
+    "postprocessClickToResultReadyDurationMs": 18.672,
+    "postProcessTimeoutBudgetMs": 60000,
+    "playbackProbeResponsiveDuringPostprocess": true
+  }
+}
