@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { verifyRecordingPackageIntegrity } from "../../packages/recording-schema/dist/index.js";
 import { canonicalStringify } from "../../packages/recording-schema/dist/hash.js";
 import {
@@ -142,4 +144,18 @@ test("explicit invalid duration, event and byte budgets are rejected", async () 
     /budget/,
   );
   await assert.rejects(() => generateRecordingFixture({ eventCount: 20001 }));
+});
+
+test("browser CLI rejects invalid or repeated navigation routes before starting Chrome", () => {
+  const script = fileURLToPath(new URL("../perf/browser-benchmark.mjs", import.meta.url));
+  for (const routes of ["unknown", "home,home", "home,"]) {
+    const result = spawnSync(process.execPath, [script, `--navigation-routes=${routes}`], {
+      cwd: fileURLToPath(new URL("../../", import.meta.url)),
+      encoding: "utf8",
+      timeout: 10000,
+    });
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Navigation routes must be unique home, record or replay values/);
+  }
 });

@@ -56,6 +56,12 @@ const versions = [
 const profiles = option("profiles", "desktop,limited").split(",");
 if (profiles.some((profile) => !["desktop", "limited"].includes(profile)))
   throw new Error("Profiles must be desktop or limited");
+const navigationRouteNames = option("navigation-routes", "home,record,replay").split(",");
+if (
+  navigationRouteNames.some((route) => !["home", "record", "replay"].includes(route)) ||
+  new Set(navigationRouteNames).size !== navigationRouteNames.length
+)
+  throw new Error("Navigation routes must be unique home, record or replay values");
 const datasetCounts = option("datasets", "2000,10000,20000")
   .split(",")
   .map(Number);
@@ -105,6 +111,8 @@ const report = {
     seed: DEFAULT_SEED,
     samplesPerRouteAndCache: samples,
     observationMs,
+    observationDefinition: "hard navigation → DOMContentLoaded → fixed observationMs without interaction; ready/LCP times are still measured from navigation timeOrigin",
+    navigationRoutes: [],
     operations,
     percentileMethod: "R7 interpolation",
     deployment: "loopback production static files",
@@ -167,13 +175,12 @@ try {
     schemaVersion: beforeRoot ? "0.1.0" : "0.2.0",
   });
   report.datasets.push({ purpose: "navigation", ...navigationFixture.stats });
+  const routePaths = { home: "/", record: "/record", replay: `/replay/${navigationFixture.pkg.meta.id}` };
+  const navigationRoutes = navigationRouteNames.map((route) => routePaths[route]);
+  report.environment.navigationRoutes = navigationEnabled ? navigationRoutes : [];
   if (navigationEnabled)
     for (const profile of profiles)
-      for (const route of [
-        "/",
-        "/record",
-        `/replay/${navigationFixture.pkg.meta.id}`,
-      ])
+      for (const route of navigationRoutes)
         for (let sample = 0; sample < samples; sample++) {
           // Alternate A/B order to reduce time-of-run drift. Each cold/warm pair owns
           // a fresh context, so a preceding version never preheats the next version.

@@ -10,7 +10,7 @@ node scripts/perf/snapshot-seek-benchmark.mjs --out=artifacts/perf/snapshot-seek
 CODE_TAPE_CHROME_PATH='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' node scripts/perf/browser-benchmark.mjs --after-web-root=apps/web/dist --out=artifacts/perf/browser.json --power-mode=AC
 ```
 
-正式默认：每路由、环境、版本分别 10 个冷缓存和 10 个暖缓存样本，10 秒无交互 LCP 观察窗，100 个交替正反向 Seek（另有 10 个预热操作）。桌面与 CPU 4×、10 Mbps、100 ms 两组。单页、单 Chromium 顺序运行；运行期间避免并行构建、推理或其他浏览器实验。`--power-mode` 应填写真实状态，没有填写时明确记录 `unreported`。
+正式默认：每路由、环境、版本分别 10 个冷缓存和 10 个暖缓存样本，DOMContentLoaded 后 10 秒无交互 LCP 观察窗，100 个交替正反向 Seek（另有 10 个预热操作）。LCP、ready 数值仍从导航的 timeOrigin 起算，不是从观察窗起算。桌面与 CPU 4×、10 Mbps、100 ms 两组。单页、单 Chromium 顺序运行；运行期间避免并行构建、推理或其他浏览器实验。`--power-mode` 应填写真实状态，没有填写时明确记录 `unreported`。
 
 如准备了 fork 主分支 `0ac9097` 的独立生产构建，增加 `--before-web-root=/path/to/baseline/apps/web/dist`。路由实验交替测 A/B；两端使用同一份 0.1.0 录制字节。旧版只有 Slider，不能用于“全量事件列表”对照；列表实验只在新版的同一列表上比较 `?benchmark=full` 与虚拟化。
 
@@ -23,6 +23,14 @@ node scripts/perf/browser-benchmark.mjs --samples=1 --observation-ms=1000 --oper
 ```
 
 可以用 `--skip-navigation` 或 `--skip-interactions` 单独重跑一种实验。静态服务使用独立 4601/4602 端口，`/_perf/blank` 只用于计时外播种 IndexedDB，不导入应用脚本。禁用模型请求使用 CDP `Network.setBlockedURLs`，两组相同；没有使用会关闭 HTTP 缓存的 Playwright routing。生产静态服务只模拟匿名账号接口，登录、上传性能不属于此实验。
+
+`--navigation-routes=home,record,replay` 默认测三个页面，允许选择唯一枚举子集；JSON 记录解析后的实际路径。兼容修复后的独立回放复测例如：
+
+```sh
+node scripts/perf/browser-benchmark.mjs --before-web-root=/path/to/baseline/dist --after-web-root=/path/to/fixed/dist --navigation-routes=replay --skip-interactions --observation-ms=10000 --out=artifacts/perf/browser-legacy-fixed-replay.json --power-mode=AC
+```
+
+不同源码版本、观察窗或样本量的实验必须保存为不同文件，不覆盖最初的失败，也不合并成同一次 A/B 统计。
 
 原始 JSON 包含样本、失败、环境、构建与 lockfile 指纹、数据 checksum、资源字节、最后一个 LCP 元素、业务 ready、DOM 行数、滚动 RAF 间隔、长任务及 Seek 呈现延迟。RAF 间隔不等同于实际 FPS；实验 p75 不等同于线上用户 p75。状态重建对照在 Node 中使用同一个 reducer、快照深克隆及计时外建立的索引；浏览器结果单列，不用函数返回时间冒充代码绘制完成。
 
