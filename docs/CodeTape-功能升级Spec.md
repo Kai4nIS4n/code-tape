@@ -207,7 +207,9 @@ actorIds 仅在可靠获得时记录：一个防抖窗口可能包含多人修�
 
 录制快照继续采用：事件推进时检查距上次快照是否达到 5 秒，或累计 50 条稳定事件，外加暂停、恢复、切语言、运行等语义节点。没有事件时不为了凑每 5 秒而重复复制相同状态；保持现有事件驱动规则并写清楚含义。
 
-DataChannel 保留 seq/hash/buffer/snapshot-request 恢复机制。周期快照和请求快照均由候选人统一状态产生；生成一致状态前先 flush 待录正文，快照带录制 sessionId、覆盖到的 eventSeq。面试官用它恢复“候选人观察状态”，再应用快照之后的缓存事件。
+协作模式 DataChannel 使用独立的 observer-event/observer-snapshot，保留原录制 seq、buffer、snapshot-request；正文变化投影成 documentId/version，无用事件为 noop，不直接跳过 seq。初始信息、恢复基线和观察快照只携带视图/录制/运行元数据，不重传正文，不复用录制事件校验或回放 reducer。运行结果保留 runId 与执行时 inputDocumentsHash，该 Hash 只关联运行输入，不与此刻的 Y.Doc 正文比较。旧只读模式保留全文事件、正文 Hash 与完整观察快照。
+
+周期快照和请求快照均由候选人统一状态产生；生成一致状态前先 flush 待录正文，快照带录制 sessionId、覆盖到的 eventSeq。面试官用模式匹配的快照恢复“候选人观察状态”，再应用快照之后的缓存事件；临时协作断线不切换成全文模式。
 
 最重要的隔离：面试官的可编辑 Monaco model 不再由 RemoteTimelineBuffer 的 editor.code 直接驱动。快照修复的是观察流，不会覆盖双方的 Y.Doc。CRDT 离线合并靠 CRDT 协议，不靠 seq/hash/完整代码快照。
 

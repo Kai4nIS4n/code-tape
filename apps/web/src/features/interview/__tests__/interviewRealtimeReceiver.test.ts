@@ -3,8 +3,63 @@ import type { RecordingEvent, ReplayStableState } from "@/shared/recording-schem
 import type { InterviewEventsDataChannel } from "../interviewMediaSession";
 import { createInterviewRealtimeReceiver } from "../interviewRealtimeReceiver";
 import { createRemoteInterviewWorkbench } from "../remoteInterviewWorkbench";
+import { createRemoteObserverWorkbench } from "../interviewObserver";
+import { createInterviewSyncPublisher } from "../interviewSync";
 
 describe("InterviewRealtimeReceiver", () => {
+  it("routes collaborative placeholders in original seq order without retaining document text", () => {
+    const sent: string[] = [];
+    const publisher = createInterviewSyncPublisher({
+      mode: "observer", roomId: "room-1", sessionId: "session-1",
+      channel: { readyState: "open", send: (data) => { sent.push(data); } },
+    });
+    publisher.publishRecordingEvent(contentEvent(1, "PRIVATE-RECORDED-TEXT"));
+    publisher.publishRecordingEvent(contentEvent(2, "SECOND-PRIVATE-TEXT"));
+    const workbench = createRemoteObserverWorkbench();
+    const receiver = createInterviewRealtimeReceiver({ mode: "observer", roomId: "room-1", workbench });
+    expect(receiver.handleData(sent[1]).ok).toBe(true);
+    expect(workbench.getState().snapshotRequestNeeded?.expectedSeq).toBe(1);
+    expect(receiver.handleData(sent[0]).ok).toBe(true);
+    expect(workbench.getState()).toMatchObject({ lastAppliedSeq: 2, expectedSeq: 3, snapshotRequestNeeded: null });
+    expect(JSON.stringify(workbench.getState())).not.toContain("PRIVATE");
+    expect(workbench.getState()).not.toHaveProperty("stableState");
+  });
+
+  it("rejects full-body packets and injected code in collaborative mode instead of falling back", () => {
+    const sent: string[] = [];
+    const publisher = createInterviewSyncPublisher({
+      mode: "observer", roomId: "room-1", sessionId: "session-1",
+      channel: { readyState: "open", send: (data) => { sent.push(data); } },
+    });
+    publisher.publishRecordingEvent(contentEvent(1, "PRIVATE"));
+    const workbench = createRemoteObserverWorkbench();
+    const receiver = createInterviewRealtimeReceiver({ mode: "observer", roomId: "room-1", workbench });
+    expect(receiver.handleData(JSON.stringify(messageFor(contentEvent(1, "legacy"))))).toEqual({ ok: false, reason: "unsupported-kind" });
+    const injected = JSON.parse(sent[0]);
+    injected.event.payload.code = "injected-full-text";
+    expect(receiver.handleData(JSON.stringify(injected))).toEqual({ ok: false, reason: "invalid-message" });
+    expect(workbench.getState().lastAppliedSeq).toBe(0);
+    expect(receiver.handleData(JSON.stringify({ ...JSON.parse(sent[0]), roomId: "another-room" }))).toEqual({ ok: false, reason: "room-mismatch" });
+  });
+
+  it("accepts only lightweight snapshots for the collaborative workbench", () => {
+    const sent: string[] = [];
+    const publisher = createInterviewSyncPublisher({
+      mode: "observer", roomId: "room-1", sessionId: "session-1",
+      channel: { readyState: "open", send: (data) => { sent.push(data); } },
+    });
+    publisher.publishRecordingEvent(contentEvent(1, "PRIVATE"));
+    expect(publisher.publishSnapshot().ok).toBe(true);
+    const workbench = createRemoteObserverWorkbench();
+    const receiver = createInterviewRealtimeReceiver({ mode: "observer", roomId: "room-1", workbench });
+    const packet = JSON.parse(sent[1]);
+    const injected = { ...packet, state: { ...packet.state, editor: { code: "FORBIDDEN" } } };
+    expect(receiver.handleData(JSON.stringify(injected))).toEqual({ ok: false, reason: "invalid-message" });
+    expect(receiver.handleData(sent[1]).ok).toBe(true);
+    expect(workbench.getState()).toMatchObject({ lastAppliedSeq: 1, expectedSeq: 2 });
+    expect(workbench.getState().observerState).not.toHaveProperty("editor");
+  });
+
   it("applies valid recording-event messages to the remote workbench", () => {
     const workbench = createRemoteInterviewWorkbench({ initialState: initialState() });
     const channel = createFakeEventsChannel();

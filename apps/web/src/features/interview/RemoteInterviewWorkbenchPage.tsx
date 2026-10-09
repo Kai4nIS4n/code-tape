@@ -28,6 +28,7 @@ import {
   type InterviewMediaSessionState,
 } from "./interviewMediaSession";
 import { createInterviewRealtimeReceiver } from "./interviewRealtimeReceiver";
+import { createRemoteObserverWorkbench, type RemoteObserverWorkbenchState } from "./interviewObserver";
 import { buildSnapshotRequestMessage } from "./interviewSync";
 import { createDebugLog, type DebugLogOptions } from "@/shared/debugLog";
 import { createInterviewRoomClient, type InterviewRoomClient } from "./interviewRoomClient";
@@ -40,8 +41,10 @@ import {
 import { INITIAL_REMOTE_INTERVIEW_STABLE_STATE } from "./remoteInterviewInitialState";
 import {
   createRemoteInterviewWorkbench,
-  type RemoteInterviewWorkbenchState,
+  type RemoteInterviewWorkbenchState as LegacyWorkbenchState,
 } from "./remoteInterviewWorkbench";
+
+type RemoteInterviewWorkbenchState = LegacyWorkbenchState | RemoteObserverWorkbenchState;
 
 export type RemoteInterviewConnectionStatus =
   | "missing-join-code"
@@ -125,15 +128,20 @@ function RemoteInterviewWorkbenchRoom({
   );
   const createSignalingClient = deps.createSignalingClient ?? createInterviewSignalingClient;
   const debug = useMemo(() => createDebugLog(deps.debug), [deps.debug]);
+  const [observerMode] = useState(() => featureFlags.collaboration);
   const workbench = useMemo(
-    () => createRemoteInterviewWorkbench({ initialState: INITIAL_REMOTE_INTERVIEW_STABLE_STATE }),
-    [],
+    () => observerMode
+      ? createRemoteObserverWorkbench({ debug: deps.debug })
+      : createRemoteInterviewWorkbench({ initialState: INITIAL_REMOTE_INTERVIEW_STABLE_STATE }),
+    [deps.debug, observerMode],
   );
   const receiver = useMemo(
-    () => createInterviewRealtimeReceiver({ roomId, workbench }),
+    () => "pushObserverEvent" in workbench
+      ? createInterviewRealtimeReceiver({ mode: "observer", roomId, workbench })
+      : createInterviewRealtimeReceiver({ roomId, workbench }),
     [roomId, workbench],
   );
-  const [workbenchState, setWorkbenchState] = useState(() => workbench.getState());
+  const [workbenchState, setWorkbenchState] = useState<RemoteInterviewWorkbenchState>(() => workbench.getState());
   const [mediaSession, setMediaSession] = useState<InterviewMediaSession | null>(null);
   const [mediaState, setMediaState] = useState<InterviewMediaSessionState>(
     emptyInterviewMediaSessionState,
@@ -596,8 +604,9 @@ export function RemoteInterviewWorkbenchView({
   onToggleMicrophone,
   onToggleCamera,
 }: RemoteInterviewWorkbenchViewProps) {
-  const editor = workbenchState.stableState.editor;
-  const runtime = workbenchState.stableState.runtime;
+  const legacyEditor = "stableState" in workbenchState ? workbenchState.stableState.editor : null;
+  const editor = "observerState" in workbenchState ? workbenchState.observerState.view : workbenchState.stableState.editor;
+  const runtime = "observerState" in workbenchState ? workbenchState.observerState.runtime : workbenchState.stableState.runtime;
   const sync = syncStatusView(workbenchState);
   const connection = connectionStatusView(connectionState);
   const previewRuntime = useMemo(() => createIframeRuntime(), []);
@@ -667,19 +676,24 @@ export function RemoteInterviewWorkbenchView({
           <div className="relative min-h-0 flex-1">
             {activeCollaboration ? (
               <CollaborativeEditorWorkspace session={activeCollaboration} />
-            ) : (
+            ) : legacyEditor ? (
               <CodeEditor
-                language={editor.language}
-                initialValue={editor.code}
-                value={editor.code}
-                fontSize={editor.fontSize}
-                theme={editor.theme}
+                language={legacyEditor.language}
+                initialValue={legacyEditor.code}
+                value={legacyEditor.code}
+                fontSize={legacyEditor.fontSize}
+                theme={legacyEditor.theme}
                 readOnly
-                cursor={editor.cursor}
-                selection={editor.selection}
-                scrollTop={editor.scrollTop}
-                scrollLeft={editor.scrollLeft}
+                cursor={legacyEditor.cursor}
+                selection={legacyEditor.selection}
+                scrollTop={legacyEditor.scrollTop}
+                scrollLeft={legacyEditor.scrollLeft}
               />
+            ) : (
+              <div role="status" className="p-6 text-sm text-muted">
+                协作正文暂不可用，观察快照不会替代协作文档。
+                <LocalCollaborationDrafts roomId={roomId} />
+              </div>
             )}
             <div className="pointer-events-none absolute bottom-4 right-4 z-50 h-32 w-32 overflow-hidden rounded-full border border-border bg-surface-raised shadow-elevation-2">
               <MediaVideo
@@ -815,7 +829,7 @@ function syncStatusView(state: RemoteInterviewWorkbenchState): {
         ? state.snapshotRequestNeeded.reason === "hash-mismatch"
           ? `事件 seq ${state.snapshotRequestNeeded.expectedSeq} 内容校验失败，已保留 seq ${state.snapshotRequestNeeded.lastAppliedSeq} 的稳定状态`
           : `缺失事件 seq ${state.snapshotRequestNeeded.expectedSeq}，已保留 seq ${state.snapshotRequestNeeded.lastAppliedSeq} 的稳定状态`
-        : "正在等待候选人状态，已保留最后稳定代码",
+        : "正在等待候选人状态，已保留最后稳定观察状态",
       toneClass: "border-warning/40 bg-warning/10 text-warning",
       Icon: SignalHigh,
     };

@@ -7,6 +7,13 @@ import {
 import type { InterviewEventsDataChannel } from "./interviewMediaSession";
 import type { InterviewRecordingEventMessage, InterviewSnapshotMessage } from "./interviewSync";
 import type { RemoteInterviewWorkbench } from "./remoteInterviewWorkbench";
+import {
+  isObserverEventMessage,
+  isObserverSnapshotMessage,
+  type InterviewObserverEventMessage,
+  type InterviewObserverSnapshotMessage,
+  type RemoteObserverWorkbench,
+} from "./interviewObserver";
 
 export type InterviewRealtimeReceiverIgnoredReason =
   | "non-string-data"
@@ -16,14 +23,16 @@ export type InterviewRealtimeReceiverIgnoredReason =
   | "room-mismatch";
 
 export type InterviewRealtimeReceiverResult =
-  | { ok: true; message: InterviewRecordingEventMessage | InterviewSnapshotMessage }
+  | { ok: true; message: InterviewRecordingEventMessage | InterviewSnapshotMessage | InterviewObserverEventMessage | InterviewObserverSnapshotMessage }
   | { ok: false; reason: InterviewRealtimeReceiverIgnoredReason };
 
 export type InterviewRealtimeReceiverOptions = {
   roomId: string;
-  workbench: RemoteInterviewWorkbench;
   onMessageResult?: (result: InterviewRealtimeReceiverResult) => void;
-};
+} & (
+  | { mode?: "legacy"; workbench: RemoteInterviewWorkbench }
+  | { mode: "observer"; workbench: RemoteObserverWorkbench }
+);
 
 export type InterviewRealtimeReceiver = {
   attach(channel: InterviewEventsDataChannel): () => void;
@@ -104,14 +113,27 @@ export function createInterviewRealtimeReceiver(
       return notify({ ok: false, reason: "invalid-json" });
     }
 
-    if (
-      !isPlainObject(parsed) ||
-      (parsed.kind !== "recording-event" && parsed.kind !== "state-snapshot")
-    ) {
+    if (!isPlainObject(parsed)) {
       return notify({ ok: false, reason: "unsupported-kind" });
     }
+    const expectedKinds = options.mode === "observer"
+      ? ["observer-event", "observer-snapshot"]
+      : ["recording-event", "state-snapshot"];
+    if (!expectedKinds.includes(String(parsed.kind)))
+      return notify({ ok: false, reason: "unsupported-kind" });
     if (parsed.roomId !== options.roomId) {
       return notify({ ok: false, reason: "room-mismatch" });
+    }
+
+    if (options.mode === "observer") {
+      if (parsed.kind === "observer-snapshot") {
+        if (!isObserverSnapshotMessage(parsed)) return notify({ ok: false, reason: "invalid-message" });
+        options.workbench.pushObserverSnapshot(parsed);
+        return notify({ ok: true, message: parsed });
+      }
+      if (!isObserverEventMessage(parsed)) return notify({ ok: false, reason: "invalid-message" });
+      options.workbench.pushObserverEvent(parsed);
+      return notify({ ok: true, message: parsed });
     }
 
     if (parsed.kind === "state-snapshot") {

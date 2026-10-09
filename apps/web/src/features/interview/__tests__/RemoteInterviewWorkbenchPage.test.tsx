@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodeEditorProps } from "@/features/editor/CodeEditor";
 import type { RecordingEvent, ReplayStableState } from "@/shared/recording-schema";
 import { ThemeProvider } from "@/shared/ui/themeProvider";
@@ -25,6 +25,10 @@ import {
 } from "../RemoteInterviewWorkbenchPage";
 import type { RemoteInterviewWorkbenchState } from "../remoteInterviewWorkbench";
 import type { DebugLogOptions } from "@/shared/debugLog";
+import { createRemoteObserverWorkbench } from "../interviewObserver";
+
+const featureFlagMock = vi.hoisted(() => ({ collaboration: false }));
+vi.mock("@/shared/featureFlags", () => ({ featureFlags: featureFlagMock }));
 
 const codeEditorMock = vi.hoisted(() => ({
   calls: [] as CodeEditorProps[],
@@ -52,9 +56,23 @@ vi.mock("@/features/runtime-preview/iframeRuntime", () => ({
 }));
 
 describe("RemoteInterviewWorkbenchPage", () => {
+  beforeEach(() => { featureFlagMock.collaboration = false; });
   afterEach(() => {
     codeEditorMock.calls.length = 0;
     vi.restoreAllMocks();
+  });
+
+  it("never falls back to a historical editor while collaborative documents are unavailable", () => {
+    featureFlagMock.collaboration = true;
+    renderWorkbenchView({
+      roomId: "collaborative-room",
+      collaboration: null,
+      workbenchState: createRemoteObserverWorkbench().getState(),
+      mediaState: makeMediaState(),
+    });
+    expect(screen.getByText("协作正文暂不可用，观察快照不会替代协作文档。")).toBeInTheDocument();
+    expect(codeEditorMock.calls).toHaveLength(0);
+    expect(screen.queryByLabelText("Mock read-only code editor")).not.toBeInTheDocument();
   });
 
   it("renders the candidate editor state through a read-only editor", () => {
