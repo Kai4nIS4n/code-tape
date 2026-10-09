@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type BrowserContext, type Page } from "@playwright/test";
 import type * as Monaco from "monaco-editor";
 
 const API = `http://127.0.0.1:${process.env.CODE_TAPE_E2E_API_PORT ?? "4173"}`;
@@ -11,8 +11,16 @@ test("two account members merge real offline edits and preserve inactive HTML in
   request,
 }) => {
   test.setTimeout(120_000);
-  const candidateContext = await browser.newContext({ baseURL: WEB });
-  const interviewerContext = await browser.newContext({ baseURL: WEB });
+  // Isolated Chromium profile with synthetic camera/microphone only. The
+  // actual SDP, ICE and DataChannel paths remain browser-native and unmocked.
+  const rtcBrowser = await browser.browserType().launch({
+    channel: "chromium",
+    args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"],
+  });
+  const candidateContext = await rtcBrowser.newContext({ baseURL: WEB, permissions: ["camera", "microphone"] });
+  const interviewerContext = await rtcBrowser.newContext({ baseURL: WEB, permissions: ["camera", "microphone"] });
+  await captureObserverChannels(candidateContext);
+  await captureObserverChannels(interviewerContext);
   const candidate = await candidateContext.newPage();
   const interviewer = await interviewerContext.newPage();
   const errors: string[] = [];
@@ -93,14 +101,54 @@ test("two account members merge real offline edits and preserve inactive HTML in
     const invite = await renewed.json() as { token: string };
     expect(invite.token).not.toBe(room.joinCode);
     await expect(candidate.getByText(invite.token, { exact: true })).toBeVisible();
+    // Start this observer check with a fresh interviewer join after the
+    // candidate reload. This is the native signaling offer trigger; Yjs reload
+    // and server-restart persistence were already verified independently above.
+    await interviewer.reload();
+    await editorReady(interviewer);
+    await saved(interviewer);
 
     await candidate.getByLabel("麦克风设备").selectOption("");
     await candidate.getByLabel("摄像头设备").selectOption("");
+    await eventsChannelOpen(candidate);
+    await eventsChannelOpen(interviewer);
+    await candidate.evaluate(() => { (globalThis as ObserverCaptureWindow).__observerCapture.sent.length = 0; });
     await candidate.getByRole("button", { name: "开始录制", exact: true }).click();
     await expect(candidate.getByLabel("录制状态：录制中")).toBeVisible();
+    await control(request, "/_e2e/transport", { userId: bob.id, blocked: true });
+    await expect(interviewer.locator("[data-collaboration-status]")).toHaveAttribute(
+      "data-collaboration-status",
+      "local-saved",
+    );
     await interviewer.getByLabel("协同文档").selectOption("html");
     const html = '<p id="remote-html">Interviewer changed inactive HTML</p>';
     await replaceEditor(interviewer, html);
+    await expect.poll(() => actualEditorSource(interviewer, "html")).toBe(html);
+    await expect.poll(() => actualEditorSource(candidate, "html")).not.toBe(html);
+    const snapshotCount = (await observerMessages(candidate)).filter((message) => message.kind === "observer-snapshot").length;
+    const receivedSnapshotCount = await interviewer.evaluate(() => (globalThis as ObserverCaptureWindow).__observerCapture.received.filter(
+      (message) => message.kind === "observer-snapshot",
+    ).length);
+    await interviewer.evaluate((roomId) => {
+      const channel = (globalThis as ObserverCaptureWindow).__observerCapture.channels.find(
+        (channel) => channel.label === "events" && channel.readyState === "open",
+      );
+      if (!channel) throw new Error("Real interviewer events DataChannel is not open");
+      channel.send(JSON.stringify({
+        kind: "snapshot-request", roomId, sessionId: "e2e-interviewer", messageId: crypto.randomUUID(),
+        sentAt: Date.now(), reason: "manual-reconnect", expectedSeq: 1, lastAppliedSeq: 0,
+      }));
+    }, room.roomId);
+    await expect.poll(async () => (await observerMessages(candidate)).filter(
+      (message) => message.kind === "observer-snapshot",
+    ).length).toBeGreaterThan(snapshotCount);
+    await expect.poll(() => interviewer.evaluate(() => (globalThis as ObserverCaptureWindow).__observerCapture.received.filter(
+      (message) => message.kind === "observer-snapshot",
+    ).length)).toBeGreaterThan(receivedSnapshotCount);
+    // The observation snapshot describes the candidate's run/view state, not
+    // the interviewer's unsynchronized Y.Doc. A real request must not erase it.
+    await expect.poll(() => actualEditorSource(interviewer, "html")).toBe(html);
+    await control(request, "/_e2e/transport", { userId: bob.id, blocked: false });
     await saved(interviewer);
     // A durable ACK does not assert that the peer has applied its inbound
     // update. Wait for the candidate's actual inactive document as well.
@@ -112,12 +160,26 @@ test("two account members merge real offline edits and preserve inactive HTML in
       candidate.frameLocator('iframe[title="code-tape preview"]').locator("body"),
     ).toContainText("Interviewer changed inactive HTML");
     await expect(candidate.getByRole("button", { name: "运行代码", exact: true })).toBeEnabled();
+    await expect(
+      interviewer.frameLocator('iframe[title="code-tape preview"]').locator("body"),
+    ).toContainText("Interviewer changed inactive HTML");
     await candidate.getByRole("button", { name: "停止录制", exact: true }).click();
     await expect(candidate).toHaveURL(/\/replay\/[^/]+$/u);
     await expect(candidate.getByRole("button", { name: "播放", exact: true })).toBeEnabled();
+    const messages = await observerMessages(candidate);
+    expect(messages.length).toBeGreaterThan(0);
+    expect(messages.every((message) => message.kind === "observer-event" || message.kind === "observer-snapshot")).toBe(true);
+    messages.forEach(assertNoObserverEditorBody);
+    const observedEvents = messages.filter((message) => message.kind === "observer-event").map(
+      (message) => message.event as { seq: number; type: string; payload: Record<string, unknown> },
+    );
+    expect(observedEvents.map((event) => event.seq)).toEqual(observedEvents.map((_, index) => index + 1));
+    expect(observedEvents.some((event) => event.type === "document-changed" && event.payload.documentId === "source:html")).toBe(true);
+    expect(observedEvents.some((event) => event.type === "run-output" && typeof event.payload.previewHtml === "string" && event.payload.previewHtml.includes("Interviewer changed inactive HTML"))).toBe(true);
     const recordingId = decodeURIComponent(new URL(candidate.url()).pathname.split("/").at(-1)!);
     const recording = await storedRecording(candidate, recordingId);
     expect(recording.manifest.schemaVersion).toBe("0.2.0");
+    expect(observedEvents.map((event) => event.seq)).toEqual(recording.events.map((event) => event.seq));
     expect(
       recording.events.some(
         (event) =>
@@ -136,6 +198,7 @@ test("two account members merge real offline edits and preserve inactive HTML in
   } finally {
     await candidateContext.close();
     await interviewerContext.close();
+    await rtcBrowser.close();
   }
 });
 
@@ -322,7 +385,7 @@ async function storedRecording(
   id: string,
 ): Promise<{
   manifest: { schemaVersion: string };
-  events: Array<{ type: string; payload: Record<string, unknown> }>;
+  events: Array<{ seq: number; type: string; payload: Record<string, unknown> }>;
 }> {
   return page.evaluate(async (recordingId) => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -343,4 +406,63 @@ async function storedRecording(
       db.close();
     }
   }, id);
+}
+
+type ObserverCaptureWindow = typeof globalThis & {
+  __observerCapture: { channels: RTCDataChannel[]; sent: Record<string, unknown>[]; received: Record<string, unknown>[] };
+};
+async function captureObserverChannels(context: BrowserContext) {
+  await context.addInitScript(() => {
+    const capture = { channels: [] as RTCDataChannel[], sent: [] as Record<string, unknown>[], received: [] as Record<string, unknown>[] };
+    (globalThis as ObserverCaptureWindow).__observerCapture = capture;
+    const attached = new WeakSet<RTCDataChannel>();
+    const track = (channel: RTCDataChannel) => {
+      if (channel.label !== "events" || attached.has(channel)) return;
+      attached.add(channel);
+      capture.channels.push(channel);
+      channel.addEventListener("message", (event) => {
+        if (typeof event.data !== "string") return;
+        try { capture.received.push(JSON.parse(event.data) as Record<string, unknown>); }
+        catch { /* Binary or non-JSON messages are not observer packets. */ }
+      });
+      const send = channel.send;
+      channel.send = ((data: unknown) => {
+        Reflect.apply(send, channel, [data]);
+        if (typeof data === "string") {
+          try { capture.sent.push(JSON.parse(data) as Record<string, unknown>); }
+          catch { /* Non-JSON RTC traffic is irrelevant to observer assertions. */ }
+        }
+      }) as typeof channel.send;
+    };
+    const PeerConnection = globalThis.RTCPeerConnection;
+    const createDataChannel = PeerConnection.prototype.createDataChannel;
+    PeerConnection.prototype.createDataChannel = function (...args) {
+      const channel = Reflect.apply(createDataChannel, this, args) as RTCDataChannel;
+      track(channel);
+      return channel;
+    };
+    globalThis.RTCPeerConnection = new Proxy(PeerConnection, {
+      construct(target, args, newTarget) {
+        const peer = Reflect.construct(target, args, newTarget) as RTCPeerConnection;
+        peer.addEventListener("datachannel", (event) => track(event.channel));
+        return peer;
+      },
+    });
+  });
+}
+async function eventsChannelOpen(page: Page) {
+  await expect.poll(() => page.evaluate(() => (globalThis as ObserverCaptureWindow).__observerCapture.channels.some(
+    (channel) => channel.label === "events" && channel.readyState === "open",
+  )), { timeout: 30_000, message: "A real events DataChannel must open; no mocked transport fallback" }).toBe(true);
+}
+async function observerMessages(page: Page): Promise<Record<string, unknown>[]> {
+  return page.evaluate(() => (globalThis as ObserverCaptureWindow).__observerCapture.sent);
+}
+function assertNoObserverEditorBody(value: unknown) {
+  if (Array.isArray(value)) { value.forEach(assertNoObserverEditorBody); return; }
+  if (value === null || typeof value !== "object") return;
+  for (const [key, nested] of Object.entries(value)) {
+    expect(["code", "documents", "initialDocuments"]).not.toContain(key);
+    assertNoObserverEditorBody(nested);
+  }
 }

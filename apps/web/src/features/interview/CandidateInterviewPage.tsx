@@ -19,6 +19,7 @@ import { authClient } from "@/features/auth/authClient";
 import { RecorderPage } from "@/features/recorder/RecorderPage";
 import { useCollaborationRoom } from "@/features/collaboration/useCollaborationRoom";
 import { featureFlags } from "@/shared/featureFlags";
+import type { InterviewObserverPublisher } from "./interviewObserver";
 import { LocalCollaborationDrafts } from "@/features/collaboration/LocalCollaborationDrafts";
 import type { EventBus } from "@/shared/recording-schema";
 import { Toggle, Tooltip } from "@/shared/ui";
@@ -205,7 +206,8 @@ function useCandidateInterviewRoomSession({
   const subscribedRealtimePublisherContextRef = useRef<CandidateRealtimePublisherContext | null>(null);
   const subscribedRecorderEventBusRef = useRef<RecorderEventBusSubscription | null>(null);
   const publishedRealtimeEventIdsRef = useRef<Set<string>>(new Set());
-  const realtimePublisherRef = useRef<InterviewSyncPublisher | null>(null);
+  const observerModeRef = useRef(featureFlags.collaboration);
+  const realtimePublisherRef = useRef<InterviewSyncPublisher | InterviewObserverPublisher | null>(null);
   const snapshotRequestChannelRef = useRef<InterviewEventsDataChannel | null>(null);
   const handleSnapshotRequestMessageRef = useRef<
     ((event: { data: unknown }) => void) | null
@@ -236,13 +238,15 @@ function useCandidateInterviewRoomSession({
       return;
     }
     stopRealtimePublisher();
-    const publisher = createInterviewSyncPublisher({
+    const publisherOptions = {
       channel: context.channel,
       roomId: context.roomId,
       sessionId: context.sessionId,
-      snapshotState: INITIAL_REMOTE_INTERVIEW_STABLE_STATE,
       beforeSnapshot: () => recorderEventBusRef.current?.flushPending?.(),
-    });
+    };
+    const publisher = observerModeRef.current
+      ? createInterviewSyncPublisher({ ...publisherOptions, mode: "observer" })
+      : createInterviewSyncPublisher({ ...publisherOptions, snapshotState: INITIAL_REMOTE_INTERVIEW_STABLE_STATE });
     realtimePublisherRef.current = publisher;
     unsubscribeRealtimePublisherRef.current = publisher.subscribeTo(bus, {
       includeBacklog: true,

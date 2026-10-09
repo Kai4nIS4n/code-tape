@@ -7,13 +7,27 @@ import {
   type RecordingEvent,
   type ReplayStableState,
 } from "@/shared/recording-schema";
+import {
+  createInterviewObserverPublisher,
+  type InterviewObserverEventMessage,
+  type InterviewObserverSnapshotMessage,
+  type InterviewObserverPublisher,
+} from "./interviewObserver";
+export {
+  createRemoteTimelineBuffer,
+  type RemoteTimelineBuffer,
+  type RemoteTimelineBufferOptions,
+  type RemoteTimelineBufferResult,
+  type RemoteTimelineBufferSnapshotResult,
+  type SnapshotRequestNeed,
+} from "./remoteTimelineBuffer";
 
 export type InterviewRealtimeDataChannel = {
   readyState: "connecting" | "open" | "closing" | "closed";
   send(data: string): void;
 };
 
-type InterviewRealtimeBaseMessage = {
+export type InterviewRealtimeBaseMessage = {
   roomId: string;
   sessionId: string;
   messageId: string;
@@ -57,6 +71,8 @@ export type InterviewAckMessage = InterviewRealtimeBaseMessage & {
 export type InterviewRealtimeMessage =
   | InterviewRecordingEventMessage
   | InterviewSnapshotMessage
+  | InterviewObserverEventMessage
+  | InterviewObserverSnapshotMessage
   | InterviewSnapshotRequestMessage
   | InterviewControlMessage
   | InterviewAckMessage;
@@ -70,6 +86,8 @@ export type InterviewSnapshotPublishResult =
   | { ok: false; reason: "channel-not-open" | "send-failed" | "no-published-events" | "snapshot-in-progress" | "flush-failed" };
 
 export type InterviewSyncPublisherOptions = {
+  /** Legacy read-only observation still transmits full recording history. */
+  mode?: "legacy" | "observer";
   channel: InterviewRealtimeDataChannel;
   roomId: string;
   sessionId: string;
@@ -99,6 +117,23 @@ export type InterviewSyncSubscribeOptions = {
 };
 
 export function createInterviewSyncPublisher(
+  options: InterviewSyncPublisherOptions & { mode: "observer" },
+): InterviewObserverPublisher;
+export function createInterviewSyncPublisher(
+  options: InterviewSyncPublisherOptions & { mode?: "legacy" },
+): InterviewSyncPublisher;
+export function createInterviewSyncPublisher(
+  options: InterviewSyncPublisherOptions,
+): InterviewSyncPublisher | InterviewObserverPublisher;
+export function createInterviewSyncPublisher(
+  options: InterviewSyncPublisherOptions,
+): InterviewSyncPublisher | InterviewObserverPublisher {
+  return options.mode === "observer"
+    ? createInterviewObserverPublisher(options)
+    : createLegacyInterviewSyncPublisher(options);
+}
+
+function createLegacyInterviewSyncPublisher(
   options: InterviewSyncPublisherOptions,
 ): InterviewSyncPublisher {
   const messageIdProvider = options.messageIdProvider ?? createMessageId;
@@ -239,100 +274,6 @@ export function createInterviewSyncPublisher(
 
 const DEFAULT_SNAPSHOT_EVENT_INTERVAL = 50;
 const DEFAULT_SNAPSHOT_TIME_INTERVAL_MS = 5000;
-
-export type SnapshotRequestNeed = {
-  reason: "gap-detected" | "hash-mismatch";
-  expectedSeq: number;
-  lastAppliedSeq: number;
-};
-
-export type RemoteTimelineBufferResult = {
-  appliedEvents: RecordingEvent[];
-  expectedSeq: number;
-  lastAppliedSeq: number;
-  snapshotRequestNeeded: SnapshotRequestNeed | null;
-};
-
-export type RemoteTimelineBufferSnapshotResult = RemoteTimelineBufferResult & {
-  snapshotAccepted: boolean;
-};
-
-export type RemoteTimelineBufferOptions = {
-  initialExpectedSeq?: number;
-};
-
-export type RemoteTimelineBuffer = {
-  pushRecordingEvent(message: InterviewRecordingEventMessage): RemoteTimelineBufferResult;
-  pushSnapshot(message: InterviewSnapshotMessage): RemoteTimelineBufferSnapshotResult;
-  state(): Omit<RemoteTimelineBufferResult, "appliedEvents">;
-};
-
-export function createRemoteTimelineBuffer(
-  options: RemoteTimelineBufferOptions = {},
-): RemoteTimelineBuffer {
-  let expectedSeq = options.initialExpectedSeq ?? 1;
-  let lastAppliedSeq = expectedSeq - 1;
-  const bufferedEvents = new Map<number, RecordingEvent>();
-
-  const currentSnapshotNeed = (): SnapshotRequestNeed | null =>
-    bufferedEvents.size > 0
-      ? { reason: "gap-detected", expectedSeq, lastAppliedSeq }
-      : null;
-
-  const currentState = () => ({
-    expectedSeq,
-    lastAppliedSeq,
-    snapshotRequestNeeded: currentSnapshotNeed(),
-  });
-
-  const drainContiguousEvents = (): RecordingEvent[] => {
-    const appliedEvents: RecordingEvent[] = [];
-    while (bufferedEvents.has(expectedSeq)) {
-      const next = bufferedEvents.get(expectedSeq);
-      if (!next) {
-        break;
-      }
-      bufferedEvents.delete(expectedSeq);
-      appliedEvents.push(next);
-      lastAppliedSeq = next.seq;
-      expectedSeq = next.seq + 1;
-    }
-    return appliedEvents;
-  };
-
-  return {
-    pushRecordingEvent(message) {
-      const { event } = message;
-      if (event.seq <= lastAppliedSeq) {
-        return { appliedEvents: [], ...currentState() };
-      }
-      if (event.seq >= expectedSeq && !bufferedEvents.has(event.seq)) {
-        bufferedEvents.set(event.seq, event);
-      }
-
-      const appliedEvents = drainContiguousEvents();
-
-      return { appliedEvents, ...currentState() };
-    },
-    pushSnapshot(message) {
-      if (message.snapshotSeq < lastAppliedSeq) {
-        return { snapshotAccepted: false, appliedEvents: [], ...currentState() };
-      }
-
-      for (const seq of bufferedEvents.keys()) {
-        if (seq <= message.snapshotSeq) {
-          bufferedEvents.delete(seq);
-        }
-      }
-      lastAppliedSeq = message.snapshotSeq;
-      expectedSeq = message.snapshotSeq + 1;
-
-      const appliedEvents = drainContiguousEvents();
-      return { snapshotAccepted: true, appliedEvents, ...currentState() };
-    },
-    state: currentState,
-  };
-}
 
 function contentHashFor(event: RecordingEvent): Pick<InterviewRecordingEventMessage, "contentHash"> {
   if (event.type !== "content-change") {
